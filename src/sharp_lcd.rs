@@ -5,8 +5,10 @@ use embassy_nrf::spim::Spim;
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::mutex::Mutex;
 use embassy_time::{Duration, Timer};
+use embedded_graphics::mono_font::{MonoTextStyle, ascii::FONT_6X10};
 use embedded_graphics::pixelcolor::BinaryColor;
 use embedded_graphics::prelude::*;
+use embedded_graphics::text::{Baseline, Text};
 use rmk::core_traits::Runnable;
 use rmk::display::{DisplayDriver, DisplayProcessor, DisplayRenderer, RenderContext};
 use rmk::types::battery::{BatteryStatus, ChargeState};
@@ -287,7 +289,13 @@ fn battery_is_charging(status: BatteryStatus) -> bool {
     )
 }
 
-fn draw_charging_mark<D>(display: &mut D, level: Option<u8>)
+fn battery_fill_width(level: Option<u8>) -> i32 {
+    level
+        .map(|level| i32::from((13 * u16::from(level) + 50) / 100))
+        .unwrap_or(0)
+}
+
+fn draw_charging_mark<D>(display: &mut D, fill_width: i32)
 where
     D: DrawTarget<Color = BinaryColor>,
 {
@@ -299,10 +307,6 @@ where
         0b00110, // ..##.
         0b01100, // .##..
     ];
-    let fill_width = level
-        .map(|level| i32::from((13 * u16::from(level) + 50) / 100))
-        .unwrap_or(0);
-
     for (row, bits) in MARK.iter().copied().enumerate() {
         for column in 0..5 {
             if bits & (1 << (4 - column)) != 0 {
@@ -324,73 +328,62 @@ where
     }
 }
 
-fn glyph(character: u8) -> (&'static [u8; 8], i32) {
-    const DIGITS: [[u8; 8]; 10] = [
-        [0x1c, 0x36, 0x22, 0x22, 0x22, 0x22, 0x36, 0x1c],
-        [0x0c, 0x0a, 0x08, 0x08, 0x08, 0x08, 0x08, 0x08],
-        [0x0c, 0x12, 0x10, 0x10, 0x08, 0x04, 0x02, 0x1f],
-        [0x0e, 0x11, 0x10, 0x0c, 0x10, 0x11, 0x11, 0x0e],
-        [0x10, 0x18, 0x14, 0x14, 0x12, 0x3f, 0x10, 0x10],
-        [0x1e, 0x01, 0x01, 0x0d, 0x13, 0x10, 0x11, 0x0e],
-        [0x1c, 0x24, 0x22, 0x1e, 0x22, 0x22, 0x22, 0x1c],
-        [0x1f, 0x10, 0x08, 0x08, 0x04, 0x04, 0x02, 0x02],
-        [0x1c, 0x22, 0x22, 0x1c, 0x22, 0x22, 0x22, 0x1c],
-        [0x1c, 0x22, 0x22, 0x22, 0x3c, 0x22, 0x12, 0x1c],
-    ];
-    const PERCENT: [u8; 8] = [0x4e, 0x2a, 0x2a, 0x1e, 0xf0, 0xa8, 0xa4, 0xe4];
-    const HYPHEN: [u8; 8] = [0, 0, 0, 0, 0x03, 0, 0, 0];
-
-    match character {
-        b'0'..=b'9' => (&DIGITS[(character - b'0') as usize], 6),
-        b'%' => (&PERCENT, 7),
-        _ => (&HYPHEN, 3),
-    }
-}
-
-fn draw_character<D>(display: &mut D, x: i32, y: i32, character: u8) -> i32
+fn draw_percent<D>(display: &mut D, x: i32, y: i32)
 where
     D: DrawTarget<Color = BinaryColor>,
 {
-    let (rows, advance) = glyph(character);
-    for (row, bits) in rows.iter().copied().enumerate() {
+    const PERCENT: [u8; 8] = [0x4e, 0x2a, 0x2a, 0x1e, 0xf0, 0xa8, 0xa4, 0xe4];
+
+    for (row, bits) in PERCENT.iter().copied().enumerate() {
         for column in 0..8 {
             if bits & (1 << column) != 0 {
                 draw_pixel(display, x + column, y + row as i32);
             }
         }
     }
-    advance
 }
 
 fn draw_battery<D>(display: &mut D, level: Option<u8>, charging: bool)
 where
     D: DrawTarget<Color = BinaryColor>,
 {
-    if let Some(level) = level {
-        let fill_width = (13 * u16::from(level) + 50) / 100;
-        if fill_width > 0 {
-            draw_rectangle(display, 4, 6, 3 + i32::from(fill_width), 10, true);
-        }
+    let fill_width = battery_fill_width(level);
+    if fill_width > 0 {
+        draw_rectangle(display, 4, 6, 3 + fill_width, 10, true);
     }
 
     if charging {
-        draw_charging_mark(display, level);
+        draw_charging_mark(display, fill_width);
     }
 
-    let mut x = 24;
-    if let Some(level) = level {
-        if level == 100 {
-            x += draw_character(display, x, 4, b'1');
-            x += draw_character(display, x, 4, b'0');
-        } else if level >= 10 {
-            x += draw_character(display, x, 4, b'0' + level / 10);
+    let mut text = [0_u8; 3];
+    let text_length = match level {
+        Some(100) => {
+            text.copy_from_slice(b"100");
+            3
         }
-        x += draw_character(display, x, 4, b'0' + level % 10);
-    } else {
-        x += draw_character(display, x, 4, b'-');
-        x += draw_character(display, x, 4, b'-');
+        Some(level @ 10..=99) => {
+            text[..2].copy_from_slice(&[b'0' + level / 10, b'0' + level % 10]);
+            2
+        }
+        Some(level) => {
+            text[0] = b'0' + level;
+            1
+        }
+        None => {
+            text[..2].copy_from_slice(b"--");
+            2
+        }
+    };
+    const FONT_ADVANCE: i32 = 6;
+    const TEXT_X: i32 = 24;
+
+    if let Ok(text) = core::str::from_utf8(&text[..text_length]) {
+        let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
+        let _ =
+            Text::with_baseline(text, Point::new(TEXT_X, 4), style, Baseline::Top).draw(display);
     }
-    let _ = draw_character(display, x, 4, b'%');
+    draw_percent(display, TEXT_X + text_length as i32 * FONT_ADVANCE, 4);
 }
 
 fn draw_split_connection<D>(display: &mut D, connected: bool)
