@@ -95,6 +95,11 @@ impl ClockedDetentDecoder {
         }
     }
 
+    /// True once all pending edge and direction evidence has settled.
+    pub fn is_idle(&self) -> bool {
+        self.unchanged_samples >= EVIDENCE_IDLE_SAMPLES && !self.tracking_a_edge
+    }
+
     /// Feed one raw sample. A debounced A transition emits one detent; its
     /// direction comes from signed Gray movement accumulated across the
     /// whole click interval rather than B at any selected instant.

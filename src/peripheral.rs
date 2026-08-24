@@ -134,10 +134,6 @@ impl Runnable for LeftRotaryEncoder {
 
         // Two 32.768 kHz timer ticks (~61 us).
         const SAMPLE_PERIOD_TICKS: u64 = 2;
-        // Return to edge-triggered sleep after ~50 ms without a level change.
-        const QUIET_SAMPLES_TO_IDLE: u32 = 820;
-
-        let mut last_levels = (self.pin_a.is_high(), self.pin_b.is_high());
 
         loop {
             select(
@@ -146,16 +142,8 @@ impl Runnable for LeftRotaryEncoder {
             )
             .await;
 
-            let mut quiet_samples = 0;
             loop {
                 let levels = (self.pin_a.is_high(), self.pin_b.is_high());
-                if levels == last_levels {
-                    quiet_samples += 1;
-                } else {
-                    quiet_samples = 0;
-                    last_levels = levels;
-                }
-
                 if let Some(detent) = self.decoder.update(levels.0, levels.1) {
                     let direction = match detent {
                         Detent::Clockwise => Direction::Clockwise,
@@ -164,7 +152,7 @@ impl Runnable for LeftRotaryEncoder {
                     ENCODER_DIRECTION_CHANNEL.send(direction).await;
                 }
 
-                if quiet_samples >= QUIET_SAMPLES_TO_IDLE {
+                if self.decoder.is_idle() {
                     break;
                 }
                 Timer::after_ticks(SAMPLE_PERIOD_TICKS).await;
