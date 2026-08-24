@@ -359,6 +359,52 @@ where
     }
 }
 
+fn draw_digit<D>(display: &mut D, digit: u8, x: i32, y: i32)
+where
+    D: DrawTarget<Color = BinaryColor>,
+{
+    const DIGITS: [[u8; 9]; 10] = [
+        [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        [
+            0b00100, 0b01100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b01110,
+        ],
+        [
+            0b01110, 0b10001, 0b00001, 0b00010, 0b00100, 0b01000, 0b10000, 0b10000, 0b11111,
+        ],
+        [
+            0b01110, 0b10001, 0b00001, 0b00001, 0b00110, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        [
+            0b00010, 0b00110, 0b01010, 0b10010, 0b10010, 0b11111, 0b00010, 0b00010, 0b00010,
+        ],
+        [
+            0b11111, 0b10000, 0b10000, 0b11110, 0b00001, 0b00001, 0b00001, 0b10001, 0b01110,
+        ],
+        [
+            0b00110, 0b01000, 0b10000, 0b10000, 0b11110, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        [
+            0b11111, 0b00001, 0b00010, 0b00010, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100,
+        ],
+        [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b01110, 0b10001, 0b10001, 0b10001, 0b01110,
+        ],
+        [
+            0b01110, 0b10001, 0b10001, 0b10001, 0b01111, 0b00001, 0b00001, 0b00010, 0b01100,
+        ],
+    ];
+
+    for (row, bits) in DIGITS[usize::from(digit)].iter().copied().enumerate() {
+        for column in 0..5 {
+            if bits & (1 << (4 - column)) != 0 {
+                draw_pixel(display, x + column, y + row as i32);
+            }
+        }
+    }
+}
+
 fn draw_battery<D>(display: &mut D, level: Option<u8>, charging: bool)
 where
     D: DrawTarget<Color = BinaryColor>,
@@ -394,7 +440,16 @@ where
     const FONT_ADVANCE: i32 = 6;
     const TEXT_X: i32 = 24;
 
-    if let Ok(text) = core::str::from_utf8(&text[..text_length]) {
+    if level.is_some() {
+        for (index, byte) in text[..text_length].iter().copied().enumerate() {
+            draw_digit(
+                display,
+                byte - b'0',
+                TEXT_X + index as i32 * FONT_ADVANCE,
+                4,
+            );
+        }
+    } else if let Ok(text) = core::str::from_utf8(&text[..text_length]) {
         let style = MonoTextStyle::new(&FONT_6X10, BinaryColor::On);
         let _ =
             Text::with_baseline(text, Point::new(TEXT_X, 4), style, Baseline::Top).draw(display);
