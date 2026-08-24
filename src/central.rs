@@ -43,7 +43,7 @@ use rmk::config::{
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::futures::future::join;
 use rmk::host::HostService;
-use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
+use rmk::input_device::battery::BatteryProcessor;
 use rmk::input_device::pmw3610::{BitBangSpiBus, Pmw3610, Pmw3610Config};
 use rmk::input_device::pointing::{PointingProcessor, PointingProcessorConfig};
 use rmk::keyboard::Keyboard;
@@ -69,7 +69,7 @@ use sharp_lcd::new_status_lcd;
 use smart_aml_trigger::SmartAutoMouseTrigger;
 use transformed_pointing_device::TransformingPointingDevice;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
-use xiao_battery::{DIVIDER_MEASURED, DIVIDER_TOTAL, XiaoBatteryMonitor};
+use xiao_battery::{DIVIDER_MEASURED, DIVIDER_TOTAL, XiaoBatteryMonitor, XiaoChargingStateReader};
 
 use calibration_config::{
     CALIBRATION_FLASH_SIZE, CALIBRATION_FLASH_START, CalibrationConfigWatcher,
@@ -156,7 +156,7 @@ async fn main(spawner: Spawner) {
     let mut battery_monitor =
         XiaoBatteryMonitor::new(p.P0_31.degrade_saadc(), p.SAADC, p.P0_14).await;
     let mut battery_processor = BatteryProcessor::new(DIVIDER_MEASURED, DIVIDER_TOTAL);
-    let mut charging_state_reader = ChargingStateReader::new(Input::new(p.P0_17, Pull::Up), true);
+    let mut charging_state_reader = XiaoChargingStateReader::new(Input::new(p.P0_17, Pull::Up));
 
     let mpsl_peripherals =
         mpsl::Peripherals::new(p.RTC0, p.TIMER0, p.TEMP, p.PPI_CH19, p.PPI_CH30, p.PPI_CH31);

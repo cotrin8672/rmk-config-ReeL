@@ -28,7 +28,7 @@ use rmk::core_traits::Runnable;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
 use rmk::event::{KeyboardEvent, publish_event_async};
 use rmk::futures::future::join;
-use rmk::input_device::battery::{BatteryProcessor, ChargingStateReader};
+use rmk::input_device::battery::BatteryProcessor;
 use rmk::input_device::rotary_encoder::Direction;
 use rmk::matrix::Matrix;
 use rmk::run_all;
@@ -42,6 +42,7 @@ use rotary_decoder::{ClockedDetentDecoder, Detent};
 use sharp_lcd::new_status_lcd;
 use xiao_battery::{
     DIVIDER_MEASURED, DIVIDER_TOTAL, PeripheralBatterySnapshot, XiaoBatteryMonitor,
+    XiaoChargingStateReader,
 };
 
 bind_interrupts!(struct Irqs {
@@ -183,7 +184,7 @@ async fn main(spawner: Spawner) {
     let mut battery_monitor =
         XiaoBatteryMonitor::new(p.P0_31.degrade_saadc(), p.SAADC, p.P0_14).await;
     let mut battery_processor = BatteryProcessor::new(DIVIDER_MEASURED, DIVIDER_TOTAL);
-    let mut charging_state_reader = ChargingStateReader::new(Input::new(p.P0_17, Pull::Up), true);
+    let mut charging_state_reader = XiaoChargingStateReader::new(Input::new(p.P0_17, Pull::Up));
     let mut battery_snapshot = PeripheralBatterySnapshot::new();
 
     let mpsl_peripherals =

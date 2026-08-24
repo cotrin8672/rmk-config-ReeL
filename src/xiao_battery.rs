@@ -1,19 +1,22 @@
 use embassy_nrf::Peri;
-use embassy_nrf::gpio::{Level, Output, OutputDrive, Pin};
+use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pin};
 use embassy_nrf::interrupt::{self, InterruptExt};
 use embassy_nrf::peripherals::SAADC;
 use embassy_nrf::saadc::{self, AnyInput, Saadc};
-use embassy_time::Duration;
+use embassy_time::{Duration, Timer};
 use rmk::core_traits::Runnable;
 use rmk::embassy_futures::select::{Either, select};
 use rmk::event::{
-    BatteryStatusEvent, CentralConnectedEvent, EventSubscriber, SubscribableEvent, publish_event,
+    BatteryStatusEvent, CentralConnectedEvent, ChargingStateEvent, EventSubscriber,
+    SubscribableEvent, publish_event,
 };
 use rmk::input_device::adc::{AnalogEventType, NrfAdc};
 
 pub const DIVIDER_MEASURED: u32 = 510;
 pub const DIVIDER_TOTAL: u32 = 1510;
 const BATTERY_SAMPLE_INTERVAL_SECS: u64 = 60;
+const CHARGING_INITIAL_DELAY_SECS: u64 = 2;
+const CHARGING_DEBOUNCE_MS: u64 = 20;
 
 /// Battery monitor for the XIAO nRF52840 onboard divider.
 pub struct XiaoBatteryMonitor {
@@ -60,6 +63,35 @@ impl XiaoBatteryMonitor {
 impl Runnable for XiaoBatteryMonitor {
     async fn run(&mut self) -> ! {
         self.adc.run().await
+    }
+}
+
+/// Edge-driven reader for the XIAO nRF52840 active-low charging signal.
+pub struct XiaoChargingStateReader {
+    input: Input<'static>,
+}
+
+impl XiaoChargingStateReader {
+    pub fn new(input: Input<'static>) -> Self {
+        Self { input }
+    }
+}
+
+impl Runnable for XiaoChargingStateReader {
+    async fn run(&mut self) -> ! {
+        Timer::after_secs(CHARGING_INITIAL_DELAY_SECS).await;
+        let mut charging = self.input.is_low();
+        publish_event(ChargingStateEvent { charging });
+
+        loop {
+            let _ = self.input.wait_for_any_edge().await;
+            Timer::after_millis(CHARGING_DEBOUNCE_MS).await;
+            let next_charging = self.input.is_low();
+            if next_charging != charging {
+                charging = next_charging;
+                publish_event(ChargingStateEvent { charging });
+            }
+        }
     }
 }
 
