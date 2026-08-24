@@ -25,7 +25,7 @@ pub const DEFAULT_CPI: u16 = 1600;
 const MAGIC: [u8; 4] = *b"RCP1";
 const FORMAT_VERSION: u8 = 1;
 const PROFILE_CPI_SLOT_COUNT: usize = PROFILE_CPI_FLASH_SIZE as usize / PROFILE_CPI_BLOB_SIZE;
-const CONFIG_REFRESH_INTERVAL: Duration = Duration::from_millis(25);
+const CONFIG_REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 const INITIAL_APPLY_DELAY: Duration = Duration::from_millis(50);
 
 const _: () = assert!(MACRO_SPACE_SIZE >= CALIBRATION_BLOB_SIZE + PROFILE_CPI_BLOB_SIZE);

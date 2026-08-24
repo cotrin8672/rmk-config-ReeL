@@ -18,6 +18,7 @@ const FORMAT_VERSION: u8 = 1;
 const MAX_ABS_COEFFICIENT: i32 = 16_000;
 const MIN_ABS_DETERMINANT: i64 = 10_000;
 const CALIBRATION_SLOT_COUNT: usize = CALIBRATION_FLASH_SIZE as usize / CALIBRATION_BLOB_SIZE;
+const CONFIG_REFRESH_INTERVAL_SECS: u64 = 1;
 
 const _: () = assert!(MACRO_SPACE_SIZE >= CALIBRATION_BLOB_SIZE);
 
@@ -291,7 +292,7 @@ impl<F: NorFlash> Runnable for CalibrationConfigWatcher<'_, '_, F> {
     async fn run(&mut self) -> ! {
         loop {
             self.refresh().await;
-            Timer::after_millis(25).await;
+            Timer::after_secs(CONFIG_REFRESH_INTERVAL_SECS).await;
         }
     }
 }
