@@ -1,4 +1,5 @@
 /target/
+**/target/
 /*.hex
 /*.uf2
 /tmp/
