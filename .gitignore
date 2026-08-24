@@ -1,0 +1,5 @@
+/target/
+/*.hex
+/*.uf2
+/tmp/
+*.log

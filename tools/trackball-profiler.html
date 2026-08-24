@@ -1,0 +1,3183 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>ReeL Trackball Profiler</title>
+  <style>
+    :root {
+      --ink: #152d38;
+      --muted: #64777e;
+      --paper: #f5f2e9;
+      --card: rgba(255, 255, 252, 0.88);
+      --line: rgba(21, 45, 56, 0.14);
+      --teal: #007f7b;
+      --teal-soft: #d7eeea;
+      --coral: #ef6a53;
+      --coral-soft: #f9ddd5;
+      --lime: #c6db3e;
+      --shadow: 0 22px 60px rgba(34, 58, 64, 0.10);
+      --radius: 24px;
+      font-family: Inter, "BIZ UDPGothic", "Yu Gothic UI", "Yu Gothic", sans-serif;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    body {
+      min-width: 320px;
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 8%, rgba(198, 219, 62, 0.18), transparent 25rem),
+        radial-gradient(circle at 90% 26%, rgba(0, 127, 123, 0.12), transparent 28rem),
+        var(--paper);
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      color: inherit;
+    }
+
+    .shell {
+      width: min(1180px, calc(100% - 36px));
+      margin: 0 auto;
+    }
+
+    main.shell {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      padding: 16px 0 20px;
+    }
+
+    #calibration { order: 1; }
+    #profileCpi { order: 2; }
+    #results { order: 3; }
+
+    .topbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 74px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+    }
+
+    .brand-mark {
+      display: grid;
+      width: 36px;
+      height: 36px;
+      place-items: center;
+      border-radius: 11px;
+      color: white;
+      background: var(--ink);
+      box-shadow: 5px 5px 0 var(--lime);
+    }
+
+    .no-log {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 12px;
+      border: 1px solid rgba(0, 127, 123, 0.22);
+      border-radius: 999px;
+      color: #006d69;
+      background: rgba(215, 238, 234, 0.72);
+      font-size: 12px;
+      font-weight: 700;
+    }
+
+    .no-log::before {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: var(--teal);
+      content: "";
+      box-shadow: 0 0 0 4px rgba(0, 127, 123, 0.12);
+    }
+
+    .device-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 9px;
+    }
+
+    .device-status[data-state="connected"]::before {
+      background: var(--lime);
+      box-shadow: 0 0 0 4px rgba(185, 215, 0, 0.18);
+    }
+
+    .device-status[data-state="error"] {
+      color: #a34132;
+      border-color: rgba(200, 79, 61, 0.25);
+      background: rgba(255, 232, 226, 0.82);
+    }
+
+    .device-status[data-state="error"]::before {
+      background: var(--coral);
+      box-shadow: 0 0 0 4px rgba(239, 106, 83, 0.14);
+    }
+
+    .device-connect {
+      padding: 8px 13px;
+      border: 1px solid var(--ink);
+      border-radius: 999px;
+      color: white;
+      background: var(--ink);
+      font-size: 11px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .device-connect:hover {
+      background: var(--teal);
+      border-color: var(--teal);
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 40px;
+      align-items: end;
+      padding: 58px 0 38px;
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--teal);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      max-width: 820px;
+      margin: 0;
+      font-size: clamp(34px, 6vw, 68px);
+      font-weight: 800;
+      letter-spacing: -0.065em;
+      line-height: 0.98;
+    }
+
+    .hero-copy {
+      max-width: 700px;
+      margin: 22px 0 0;
+      color: var(--muted);
+      font-size: 16px;
+      line-height: 1.8;
+    }
+
+    .workflow {
+      display: grid;
+      gap: 9px;
+      min-width: 210px;
+      margin: 0;
+      padding: 0;
+      list-style: none;
+      counter-reset: flow;
+    }
+
+    .workflow li {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      counter-increment: flow;
+    }
+
+    .workflow li::before {
+      display: grid;
+      width: 27px;
+      height: 27px;
+      place-items: center;
+      flex: 0 0 auto;
+      border: 1px solid var(--line);
+      border-radius: 50%;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.6);
+      content: counter(flow, decimal-leading-zero);
+      font-size: 9px;
+      font-weight: 900;
+    }
+
+    .workspace {
+      display: grid;
+      grid-template-columns: minmax(0, 1.55fr) minmax(310px, 0.75fr);
+      gap: 18px;
+      align-items: stretch;
+    }
+
+    .card {
+      overflow: hidden;
+      border: 1px solid rgba(21, 45, 56, 0.10);
+      border-radius: var(--radius);
+      background: var(--card);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(16px);
+    }
+
+    .card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 18px;
+      min-height: 50px;
+      padding: 0 18px;
+      border-bottom: 1px solid var(--line);
+    }
+
+    .card-title {
+      margin: 0;
+      font-size: 14px;
+      font-weight: 800;
+      letter-spacing: -0.01em;
+    }
+
+    .settings-nav {
+      display: flex;
+      gap: 8px;
+      margin: 18px 0 14px;
+      overflow-x: auto;
+    }
+
+    .settings-nav button {
+      flex: 0 0 auto;
+      padding: 8px 12px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.48);
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    .settings-nav button:hover,
+    .settings-nav button.active {
+      border-color: rgba(0, 127, 123, 0.38);
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+
+    .cpi-settings {
+      margin-bottom: 0;
+    }
+
+    .cpi-body {
+      padding: 12px 14px;
+    }
+
+    .cpi-intro {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    .cpi-intro p {
+      max-width: 720px;
+      margin: 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+    }
+
+    .cpi-save-state {
+      flex: 0 0 auto;
+      padding: 7px 10px;
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(21, 45, 56, 0.07);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .cpi-save-state.dirty {
+      color: #a34132;
+      background: var(--coral-soft);
+    }
+
+    .cpi-save-state.saved {
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+
+    .cpi-control {
+      display: grid;
+      grid-template-columns: minmax(170px, 0.28fr) minmax(0, 1fr);
+      gap: 14px;
+    }
+
+    .cpi-profile-picker,
+    .cpi-slider-panel {
+      display: grid;
+      gap: 10px;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      background: rgba(255, 255, 255, 0.52);
+    }
+
+    .cpi-field-label {
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .cpi-slider-head {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+    }
+
+    .cpi-value {
+      min-width: 88px;
+      padding: 7px 10px;
+      border-radius: 10px;
+      color: var(--teal);
+      background: var(--teal-soft);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 900;
+      text-align: center;
+    }
+
+    .cpi-slider {
+      height: 24px;
+      margin: 3px 0 0;
+    }
+
+    .cpi-scale {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      color: var(--muted);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 9px;
+    }
+
+    .cpi-scale span:last-child {
+      text-align: right;
+    }
+
+    .capture-mode {
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 700;
+    }
+
+    .capture-head-actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 12px;
+    }
+
+    .trace-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      background: rgba(255, 255, 255, 0.58);
+      font-size: 9px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .trace-toggle::before {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: rgba(21, 45, 56, 0.22);
+      content: "";
+    }
+
+    .trace-toggle.on {
+      border-color: rgba(239, 106, 83, 0.36);
+      color: var(--coral);
+      background: var(--coral-soft);
+    }
+
+    .trace-toggle.on::before {
+      background: var(--coral);
+      box-shadow: 0 0 0 3px rgba(239, 106, 83, 0.12);
+    }
+
+    .stage {
+      position: relative;
+      display: grid;
+      min-height: 350px;
+      place-items: center;
+      overflow: hidden;
+      outline: none;
+      cursor: crosshair;
+      background:
+        linear-gradient(rgba(21, 45, 56, 0.045) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(21, 45, 56, 0.045) 1px, transparent 1px),
+        #e9f0eb;
+      background-position: center;
+      background-size: 42px 42px;
+    }
+
+    .stage::after {
+      position: absolute;
+      inset: 16px;
+      pointer-events: none;
+      border: 1px solid rgba(21, 45, 56, 0.09);
+      border-radius: 18px;
+      content: "";
+    }
+
+    .stage-ring {
+      position: absolute;
+      width: min(48vw, 270px);
+      aspect-ratio: 1;
+      border: 1px solid rgba(21, 45, 56, 0.18);
+      border-radius: 50%;
+    }
+
+    .stage-ring::before,
+    .stage-ring::after {
+      position: absolute;
+      inset: 50% auto auto 50%;
+      background: rgba(21, 45, 56, 0.10);
+      content: "";
+      transform: translate(-50%, -50%);
+    }
+
+    .stage-ring::before {
+      width: 1px;
+      height: 114%;
+    }
+
+    .stage-ring::after {
+      width: 114%;
+      height: 1px;
+    }
+
+    .direction-arrow {
+      position: relative;
+      z-index: 3;
+      color: var(--ink);
+      font-size: 88px;
+      font-weight: 300;
+      line-height: 1;
+      text-shadow: 4px 4px 0 rgba(198, 219, 62, 0.72);
+      transform: translateY(-12px);
+    }
+
+    .stage-idle .direction-arrow {
+      color: rgba(21, 45, 56, 0.14);
+      text-shadow: none;
+    }
+
+    .vector-layer {
+      position: absolute;
+      z-index: 2;
+      width: min(48vw, 270px);
+      height: min(48vw, 270px);
+      pointer-events: none;
+      overflow: visible;
+    }
+
+    #observedVector {
+      transition: opacity 120ms ease;
+    }
+
+    .stage-message {
+      position: absolute;
+      z-index: 5;
+      bottom: 12px;
+      left: 50%;
+      width: calc(100% - 48px);
+      color: var(--muted);
+      font-size: 13px;
+      font-weight: 700;
+      line-height: 1.55;
+      text-align: center;
+      transform: translateX(-50%);
+    }
+
+    .stage-message strong {
+      color: var(--ink);
+    }
+
+    .primary {
+      position: absolute;
+      z-index: 7;
+      bottom: 40px;
+      left: 50%;
+      min-width: 210px;
+      padding: 14px 20px;
+      border: 0;
+      border-radius: 999px;
+      color: white;
+      background: var(--ink);
+      box-shadow: 0 10px 24px rgba(21, 45, 56, 0.22);
+      font-size: 13px;
+      font-weight: 800;
+      cursor: pointer;
+      transform: translateX(-50%);
+      transition: transform 150ms ease, background 150ms ease;
+    }
+
+    .primary:hover {
+      background: var(--teal);
+      transform: translateX(-50%) translateY(-2px);
+    }
+
+    .primary[hidden] {
+      display: none;
+    }
+
+    .session {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .session-body {
+      display: grid;
+      gap: 10px;
+      padding: 11px 14px;
+    }
+
+    .advanced-settings {
+      display: grid;
+      gap: 8px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+    }
+
+    .section-label {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 11px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 900;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+    }
+
+    .matrix-input {
+      display: grid;
+      grid-template-columns: 26px 1fr 1fr 26px;
+      gap: 7px;
+      align-items: center;
+    }
+
+    .bracket {
+      height: 72px;
+      border-top: 2px solid var(--ink);
+      border-bottom: 2px solid var(--ink);
+    }
+
+    .bracket.left {
+      border-left: 2px solid var(--ink);
+      border-radius: 7px 0 0 7px;
+    }
+
+    .bracket.right {
+      border-right: 2px solid var(--ink);
+      border-radius: 0 7px 7px 0;
+    }
+
+    .matrix-fields {
+      display: contents;
+    }
+
+    .matrix-input > .bracket {
+      grid-row: 1 / 3;
+    }
+
+    .matrix-input > .bracket.left {
+      grid-column: 1;
+    }
+
+    .matrix-input > .bracket.right {
+      grid-column: 4;
+    }
+
+    #f00 {
+      grid-column: 2;
+      grid-row: 1;
+    }
+
+    #f01 {
+      grid-column: 3;
+      grid-row: 1;
+    }
+
+    #f10 {
+      grid-column: 2;
+      grid-row: 2;
+    }
+
+    #f11 {
+      grid-column: 3;
+      grid-row: 2;
+    }
+
+    .matrix-fields input {
+      width: 100%;
+      height: 34px;
+      border: 1px solid var(--line);
+      border-radius: 9px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.78);
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 12px;
+      text-align: center;
+      outline: 0;
+    }
+
+    .matrix-fields input:focus {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(0, 127, 123, 0.10);
+    }
+
+    .matrix-note {
+      margin: 10px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.6;
+    }
+
+    .direction-list {
+      display: grid;
+      grid-template-columns: repeat(4, 1fr);
+      gap: 7px;
+    }
+
+    .direction-chip {
+      display: grid;
+      min-height: 48px;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      color: rgba(21, 45, 56, 0.48);
+      background: rgba(255, 255, 255, 0.45);
+      font-size: 20px;
+      transition: 160ms ease;
+    }
+
+    .direction-chip.active {
+      border-color: rgba(239, 106, 83, 0.5);
+      color: var(--coral);
+      background: var(--coral-soft);
+      box-shadow: 0 0 0 3px rgba(239, 106, 83, 0.10);
+    }
+
+    .direction-chip.done {
+      border-color: rgba(0, 127, 123, 0.22);
+      color: var(--teal);
+      background: var(--teal-soft);
+    }
+
+    .direction-chip.done::after {
+      margin-left: -4px;
+      content: "✓";
+      font-size: 9px;
+      font-weight: 900;
+      vertical-align: top;
+    }
+
+    .range-row {
+      display: grid;
+      grid-template-columns: 1fr 55px;
+      gap: 12px;
+      align-items: center;
+    }
+
+    input[type="range"] {
+      width: 100%;
+      accent-color: var(--teal);
+    }
+
+    .range-value {
+      padding: 7px 8px;
+      border-radius: 9px;
+      color: var(--teal);
+      background: var(--teal-soft);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      font-weight: 800;
+      text-align: center;
+    }
+
+    .round-select {
+      width: 100%;
+      padding: 10px 12px;
+      border: 1px solid var(--line);
+      border-radius: 11px;
+      color: var(--ink);
+      background: rgba(255, 255, 255, 0.78);
+      font-size: 11px;
+      font-weight: 800;
+      outline: 0;
+    }
+
+    .round-select:focus {
+      border-color: var(--teal);
+      box-shadow: 0 0 0 3px rgba(0, 127, 123, 0.10);
+    }
+
+    .round-select:disabled {
+      opacity: 0.62;
+    }
+
+    .ghost {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.52);
+      font-size: 12px;
+      font-weight: 800;
+      cursor: pointer;
+    }
+
+    .ghost:hover {
+      border-color: rgba(0, 127, 123, 0.42);
+      color: var(--teal);
+    }
+
+    .device-actions {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 13px;
+    }
+
+    .device-actions .ghost {
+      min-width: 0;
+    }
+
+    .device-actions button:disabled,
+    .device-connect:disabled {
+      cursor: wait;
+      opacity: 0.54;
+    }
+
+    .apply-matrix {
+      width: 100%;
+      padding: 11px 14px;
+      border: 1px solid var(--teal);
+      border-radius: 12px;
+      color: white;
+      background: var(--teal);
+      font-size: 12px;
+      font-weight: 850;
+      cursor: pointer;
+    }
+
+    .apply-matrix:hover {
+      background: var(--ink);
+      border-color: var(--ink);
+    }
+
+    .auto-apply {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 11px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 750;
+      cursor: pointer;
+    }
+
+    .auto-apply input {
+      width: 16px;
+      height: 16px;
+      accent-color: var(--teal);
+    }
+
+    .device-detail {
+      min-height: 1.5em;
+      margin: 8px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .results {
+      display: none;
+      margin-top: 18px;
+    }
+
+    .results.visible {
+      display: block;
+      animation: rise 340ms ease both;
+    }
+
+    @keyframes rise {
+      from {
+        opacity: 0;
+        transform: translateY(12px);
+      }
+    }
+
+    .result-grid {
+      display: grid;
+      grid-template-columns: 0.82fr 1.18fr;
+      gap: 0;
+    }
+
+    .diagnostic {
+      padding: 24px;
+      border-right: 1px solid var(--line);
+    }
+
+    .plot {
+      display: grid;
+      width: min(100%, 390px);
+      margin: 8px auto 0;
+      aspect-ratio: 1;
+      place-items: center;
+    }
+
+    .plot svg {
+      width: 100%;
+      height: 100%;
+      overflow: visible;
+    }
+
+    .legend {
+      display: flex;
+      justify-content: center;
+      gap: 18px;
+      margin-top: 2px;
+      color: var(--muted);
+      font-size: 10px;
+      font-weight: 800;
+    }
+
+    .legend span::before {
+      display: inline-block;
+      width: 9px;
+      height: 9px;
+      margin-right: 6px;
+      border-radius: 50%;
+      background: currentColor;
+      content: "";
+    }
+
+    .legend .before {
+      color: var(--coral);
+    }
+
+    .legend .after {
+      color: var(--teal);
+    }
+
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 8px;
+      margin-top: 21px;
+    }
+
+    .metric {
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 13px;
+      background: rgba(255, 255, 255, 0.55);
+    }
+
+    .metric-value {
+      display: block;
+      font-size: 19px;
+      font-weight: 850;
+      letter-spacing: -0.04em;
+    }
+
+    .metric-label {
+      display: block;
+      margin-top: 4px;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .outputs {
+      padding: 24px;
+    }
+
+    .result-summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+      margin-bottom: 22px;
+      padding: 14px 16px;
+      border-radius: 14px;
+      background: var(--teal-soft);
+    }
+
+    .result-summary strong {
+      font-size: 13px;
+    }
+
+    .confidence {
+      flex: 0 0 auto;
+      padding: 5px 9px;
+      border-radius: 999px;
+      color: white;
+      background: var(--teal);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+    }
+
+    .output-block + .output-block {
+      margin-top: 20px;
+      padding-top: 20px;
+      border-top: 1px solid var(--line);
+    }
+
+    .output-head {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: 15px;
+      margin-bottom: 10px;
+    }
+
+    .output-head h3 {
+      margin: 0;
+      font-size: 13px;
+    }
+
+    .output-head p {
+      margin: 4px 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.5;
+    }
+
+    .copy {
+      flex: 0 0 auto;
+      padding: 6px 9px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      color: var(--muted);
+      background: white;
+      font-size: 9px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .matrix-output {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 16px;
+      align-items: center;
+      padding: 13px 15px;
+      border-radius: 13px;
+      background: #f2f4ef;
+    }
+
+    .formula {
+      color: var(--muted);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.6;
+    }
+
+    .matrix-view {
+      display: grid;
+      grid-template-columns: 10px 74px 74px 10px;
+      grid-template-rows: 23px 23px;
+      justify-content: end;
+      align-items: center;
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 11px;
+      text-align: right;
+    }
+
+    .matrix-view .bracket {
+      grid-row: 1 / 3;
+      height: 48px;
+    }
+
+    .matrix-view .right {
+      grid-column: 4;
+    }
+
+    pre {
+      max-height: 260px;
+      margin: 0;
+      padding: 14px;
+      overflow: auto;
+      border-radius: 13px;
+      color: #d8ece8;
+      background: #17333b;
+      font-family: "Cascadia Mono", "SFMono-Regular", Consolas, monospace;
+      font-size: 10px;
+      line-height: 1.65;
+      white-space: pre;
+    }
+
+    .preview-section {
+      padding: 24px;
+      border-top: 1px solid var(--line);
+      background: rgba(233, 240, 235, 0.44);
+    }
+
+    .preview-heading {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 24px;
+      margin-bottom: 18px;
+    }
+
+    .preview-heading h2 {
+      margin: 0;
+      font-size: 20px;
+      letter-spacing: -0.035em;
+    }
+
+    .preview-heading p {
+      max-width: 670px;
+      margin: 7px 0 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.65;
+    }
+
+    .preview-shortcuts {
+      flex: 0 0 auto;
+      color: var(--muted);
+      font-family: "Cascadia Mono", Consolas, monospace;
+      font-size: 9px;
+      line-height: 1.8;
+      text-align: right;
+    }
+
+    .preview-layout {
+      display: grid;
+      grid-template-columns: 190px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .preview-controls {
+      display: flex;
+      flex-direction: column;
+      gap: 13px;
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 17px;
+      background: rgba(255, 255, 255, 0.64);
+    }
+
+    .mode-switch {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+      padding: 4px;
+      border-radius: 11px;
+      background: rgba(21, 45, 56, 0.07);
+    }
+
+    .mode-switch button {
+      padding: 8px 5px;
+      border: 0;
+      border-radius: 8px;
+      color: var(--muted);
+      background: transparent;
+      font-size: 10px;
+      font-weight: 900;
+      cursor: pointer;
+    }
+
+    .mode-switch button.selected {
+      color: white;
+      background: var(--ink);
+      box-shadow: 0 4px 12px rgba(21, 45, 56, 0.15);
+    }
+
+    .preview-stat {
+      padding: 11px;
+      border-radius: 12px;
+      background: var(--teal-soft);
+    }
+
+    .preview-stat strong {
+      display: block;
+      color: var(--teal);
+      font-size: 24px;
+      line-height: 1;
+    }
+
+    .preview-stat span {
+      display: block;
+      margin-top: 5px;
+      color: var(--muted);
+      font-size: 9px;
+      font-weight: 800;
+    }
+
+    .preview-hint {
+      margin: auto 0 0;
+      color: var(--muted);
+      font-size: 10px;
+      line-height: 1.65;
+    }
+
+    .preview-pad {
+      position: relative;
+      min-height: 340px;
+      overflow: hidden;
+      border: 1px solid rgba(21, 45, 56, 0.16);
+      border-radius: 17px;
+      cursor: crosshair;
+      background:
+        radial-gradient(circle at center, rgba(0, 127, 123, 0.09) 0 2px, transparent 3px),
+        linear-gradient(rgba(21, 45, 56, 0.04) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(21, 45, 56, 0.04) 1px, transparent 1px),
+        #f7f8f3;
+      background-position: center;
+      background-size: auto, 32px 32px, 32px 32px, auto;
+    }
+
+    .preview-pad::before,
+    .preview-pad::after {
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      pointer-events: none;
+      background: rgba(21, 45, 56, 0.08);
+      content: "";
+      transform: translate(-50%, -50%);
+    }
+
+    .preview-pad::before {
+      width: 1px;
+      height: 100%;
+    }
+
+    .preview-pad::after {
+      width: 100%;
+      height: 1px;
+    }
+
+    .preview-target {
+      position: absolute;
+      z-index: 2;
+      display: grid;
+      width: 48px;
+      height: 48px;
+      place-items: center;
+      border: 2px solid var(--coral);
+      border-radius: 50%;
+      color: var(--coral);
+      background: rgba(249, 221, 213, 0.8);
+      box-shadow: 0 0 0 9px rgba(239, 106, 83, 0.08);
+      font-size: 10px;
+      font-weight: 900;
+      transform: translate(-50%, -50%);
+      transition: left 180ms ease, top 180ms ease, background 100ms ease;
+    }
+
+    .preview-target.hot {
+      color: white;
+      background: var(--coral);
+    }
+
+    .virtual-cursor {
+      position: absolute;
+      z-index: 4;
+      width: 20px;
+      height: 20px;
+      pointer-events: none;
+      border: 3px solid white;
+      border-radius: 50%;
+      background: var(--teal);
+      box-shadow: 0 2px 10px rgba(21, 45, 56, 0.34);
+      transform: translate(-50%, -50%);
+      transition: background 100ms ease;
+    }
+
+    .preview-pad.raw .virtual-cursor {
+      background: var(--coral);
+    }
+
+    .preview-start {
+      position: absolute;
+      z-index: 6;
+      top: 50%;
+      left: 50%;
+      padding: 12px 18px;
+      border: 0;
+      border-radius: 999px;
+      color: white;
+      background: var(--ink);
+      box-shadow: 0 8px 24px rgba(21, 45, 56, 0.2);
+      font-size: 11px;
+      font-weight: 900;
+      cursor: pointer;
+      transform: translate(-50%, -50%);
+    }
+
+    .preview-start[hidden] {
+      display: none;
+    }
+
+    .preview-live-mode {
+      position: absolute;
+      z-index: 5;
+      top: 12px;
+      left: 12px;
+      padding: 6px 9px;
+      border-radius: 999px;
+      color: white;
+      background: var(--teal);
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.07em;
+    }
+
+    .preview-pad.raw .preview-live-mode {
+      background: var(--coral);
+    }
+
+    .footnotes {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 18px;
+      padding: 34px 0 58px;
+    }
+
+    .note {
+      padding-top: 14px;
+      border-top: 2px solid var(--ink);
+    }
+
+    .note-num {
+      color: var(--teal);
+      font-size: 10px;
+      font-weight: 900;
+    }
+
+    .note strong {
+      display: block;
+      margin: 8px 0 5px;
+      font-size: 12px;
+    }
+
+    .note p {
+      margin: 0;
+      color: var(--muted);
+      font-size: 11px;
+      line-height: 1.65;
+    }
+
+    .toast {
+      position: fixed;
+      z-index: 20;
+      right: 20px;
+      bottom: 20px;
+      padding: 11px 14px;
+      border-radius: 11px;
+      color: white;
+      background: var(--ink);
+      box-shadow: var(--shadow);
+      font-size: 11px;
+      font-weight: 800;
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(8px);
+      transition: 180ms ease;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 880px) {
+      .hero {
+        grid-template-columns: 1fr;
+      }
+
+      .workflow {
+        grid-template-columns: repeat(3, auto);
+        justify-content: start;
+      }
+
+      .workspace,
+      .result-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .diagnostic {
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
+
+      .stage {
+        min-height: 460px;
+      }
+    }
+
+    @media (max-width: 560px) {
+      .shell {
+        width: min(100% - 22px, 1180px);
+      }
+
+      .no-log {
+        max-width: 150px;
+        line-height: 1.3;
+      }
+
+      .device-toolbar {
+        align-items: flex-end;
+        flex-direction: column-reverse;
+        gap: 5px;
+      }
+
+      .device-connect {
+        padding: 7px 10px;
+      }
+
+      .hero {
+        padding-top: 40px;
+      }
+
+      .capture-head-actions {
+        align-items: flex-end;
+        flex-direction: column-reverse;
+        gap: 5px;
+      }
+
+      .workflow {
+        grid-template-columns: 1fr;
+      }
+
+      .stage {
+        min-height: 420px;
+      }
+
+      .direction-arrow {
+        font-size: 90px;
+      }
+
+      .metrics,
+      .footnotes {
+        grid-template-columns: 1fr;
+      }
+
+      .preview-heading {
+        align-items: start;
+        flex-direction: column;
+      }
+
+      .preview-shortcuts {
+        text-align: left;
+      }
+
+      .preview-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .cpi-intro {
+        flex-direction: column;
+      }
+
+      .cpi-control {
+        grid-template-columns: 1fr;
+      }
+
+      .preview-pad {
+        min-height: 300px;
+      }
+
+      .matrix-output {
+        grid-template-columns: 1fr;
+      }
+
+      .matrix-view {
+        justify-content: start;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        transition-duration: 0.01ms !important;
+        animation-duration: 0.01ms !important;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="shell topbar">
+    <div class="brand">
+      <span class="brand-mark">R</span>
+      <span>ReeL Tuning Console</span>
+    </div>
+    <div class="device-toolbar">
+      <div id="deviceStatus" class="no-log device-status" data-state="idle">RMK 未接続</div>
+      <button id="connectDevice" class="device-connect" type="button">ワイヤレス接続</button>
+    </div>
+  </header>
+
+  <main class="shell">
+    <section id="profileCpi" class="card cpi-settings">
+      <div class="card-head">
+        <h2 class="card-title">BTプロファイル別CPI</h2>
+        <span id="cpiSaveState" class="cpi-save-state">接続待ち</span>
+      </div>
+      <div class="cpi-body">
+        <div class="cpi-control">
+          <label class="cpi-profile-picker">
+            <span class="cpi-field-label">Profile</span>
+            <select id="profileCpiProfile" class="round-select" disabled>
+              <option value="0">Profile 1 · BT1</option>
+              <option value="1">Profile 2 · BT2</option>
+              <option value="2">Profile 3 · BT3</option>
+              <option value="3">Profile 4 · BT4</option>
+              <option value="4">Profile 5 · BT5</option>
+            </select>
+          </label>
+          <label class="cpi-slider-panel">
+            <span class="cpi-slider-head">
+              <output id="profileCpiValue" class="cpi-value" for="profileCpiSlider">1600 CPI</output>
+            </span>
+            <input id="profileCpiSlider" class="cpi-slider" type="range"
+              min="200" max="3200" step="200" value="1600" list="profileCpiTicks" disabled>
+            <datalist id="profileCpiTicks">
+              <option value="200"></option><option value="400"></option>
+              <option value="600"></option><option value="800"></option>
+              <option value="1000"></option><option value="1200"></option>
+              <option value="1400"></option><option value="1600"></option>
+              <option value="1800"></option><option value="2000"></option>
+              <option value="2200"></option><option value="2400"></option>
+              <option value="2600"></option><option value="2800"></option>
+              <option value="3000"></option><option value="3200"></option>
+            </datalist>
+            <span class="cpi-scale" aria-hidden="true">
+              <span>200</span><span>3200</span>
+            </span>
+          </label>
+        </div>
+      </div>
+    </section>
+
+    <section id="calibration" class="workspace">
+      <article class="card">
+        <div class="card-head">
+          <h2 class="card-title">較正</h2>
+          <span id="captureMode" class="capture-mode" hidden></span>
+        </div>
+        <div id="stage" class="stage stage-idle" tabindex="0" aria-label="トラックボール計測エリア">
+          <div class="stage-ring"></div>
+          <svg class="vector-layer" viewBox="-185 -185 370 370" aria-hidden="true">
+            <defs>
+              <marker id="coralArrow" viewBox="0 0 10 10" refX="8" refY="5"
+                      markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+                <path d="M 0 0 L 10 5 L 0 10 z" fill="#ef6a53"></path>
+              </marker>
+            </defs>
+            <line id="observedVector" x1="0" y1="0" x2="0" y2="0"
+                  stroke="#ef6a53" stroke-width="5" stroke-linecap="round"
+                  marker-end="url(#coralArrow)" opacity="0"></line>
+          </svg>
+          <div id="directionArrow" class="direction-arrow" aria-hidden="true">→</div>
+          <button id="startButton" class="primary" type="button">計測開始</button>
+          <div id="stageMessage" class="stage-message" aria-live="polite"></div>
+        </div>
+      </article>
+
+      <aside class="card session">
+        <div class="card-head">
+          <h2 class="card-title">設定</h2>
+          <span id="progressText" class="capture-mode">0 / 4</span>
+        </div>
+        <div class="session-body">
+          <section>
+            <div class="section-label">
+              <span>進捗</span>
+            </div>
+            <div id="directionList" class="direction-list" aria-label="計測進捗"></div>
+          </section>
+
+          <section>
+            <div class="section-label">
+              <span>感度</span>
+            </div>
+            <div class="range-row">
+              <input id="sensitivity" type="range" min="50" max="150" step="1" value="100">
+              <output id="sensitivityValue" class="range-value">1.00×</output>
+            </div>
+          </section>
+
+          <button id="resetButton" class="ghost" type="button">計測をリセット</button>
+
+          <section class="advanced-settings" aria-label="変換行列設定">
+            <div class="matrix-input" aria-label="現在の2行2列変換行列">
+              <span class="bracket left"></span>
+              <div class="matrix-fields">
+                <input id="f00" value="-0.265" inputmode="decimal" aria-label="F 1行1列">
+                <input id="f01" value="1.142" inputmode="decimal" aria-label="F 1行2列">
+                <input id="f10" value="-0.831" inputmode="decimal" aria-label="F 2行1列">
+                <input id="f11" value="0.562" inputmode="decimal" aria-label="F 2行2列">
+              </div>
+              <span class="bracket right"></span>
+            </div>
+            <div class="device-actions">
+              <button id="readMatrix" class="ghost" type="button" disabled>再読込</button>
+              <button id="applyMatrix" class="apply-matrix" type="button" disabled>適用</button>
+            </div>
+            <button id="traceToggle" class="trace-toggle" type="button" aria-pressed="false">入力表示 OFF</button>
+          </section>
+          <p id="deviceDetail" class="device-detail" hidden></p>
+        </div>
+      </aside>
+    </section>
+
+    <section id="results" class="card results" aria-live="polite">
+      <div class="card-head">
+        <h2 class="card-title">結果</h2>
+        <button id="resultResetButton" class="ghost" type="button">再計測</button>
+      </div>
+      <div class="result-grid">
+        <div class="diagnostic">
+          <div class="section-label">
+            <span>方向の齟齬</span>
+            <span>中心からの向き</span>
+          </div>
+          <div class="plot">
+            <svg id="resultPlot" viewBox="-180 -180 360 360" role="img"
+                 aria-label="補正前後の上下左右比較"></svg>
+          </div>
+          <div class="legend">
+            <span class="before">補正前</span>
+            <span class="after">補正後</span>
+          </div>
+          <div class="metrics">
+            <div class="metric">
+              <span id="beforeError" class="metric-value">—</span>
+              <span class="metric-label">補正前 RMS</span>
+            </div>
+            <div class="metric">
+              <span id="afterError" class="metric-value">—</span>
+              <span class="metric-label">補正後 RMS</span>
+            </div>
+            <div class="metric">
+              <span id="rotationValue" class="metric-value">—</span>
+              <span class="metric-label">主な回転補正</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="outputs">
+          <div class="result-summary">
+            <strong id="resultSummary">上下左右から補正値を推定しました</strong>
+            <span id="confidence" class="confidence">GOOD FIT</span>
+          </div>
+
+          <section class="output-block">
+            <div class="output-head">
+              <div>
+                <h3>補正行列 C</h3>
+                <p>いまPCへ届いている移動量に追加で掛ける行列</p>
+              </div>
+              <button class="copy" type="button" data-copy="correction">COPY</button>
+            </div>
+            <div class="matrix-output">
+              <div class="formula">corrected<br>= C · current</div>
+              <div id="correctionMatrix" class="matrix-view"></div>
+            </div>
+          </section>
+
+          <section class="output-block">
+            <div class="output-head">
+              <div>
+                <h3>置換用の最終行列 N = C · F</h3>
+                <p>センサーの raw_x / raw_y に直接掛ける値</p>
+              </div>
+              <button class="copy" type="button" data-copy="replacement">COPY</button>
+            </div>
+            <div class="matrix-output">
+              <div class="formula">output<br>= N · raw</div>
+              <div id="replacementMatrix" class="matrix-view"></div>
+            </div>
+          </section>
+
+          <section class="output-block">
+            <div class="output-head">
+              <div>
+                <h3>RMK / Rust 固定小数点スニペット</h3>
+                <p>係数は1000倍。正負両方向の端数も保持します。</p>
+              </div>
+              <button class="copy" type="button" data-copy="code">COPY</button>
+            </div>
+            <pre id="codeOutput"></pre>
+          </section>
+        </div>
+      </div>
+
+      <section class="preview-section">
+        <div class="preview-heading">
+          <div>
+            <p class="eyebrow">Live feel preview</p>
+            <h2>操作感を、その場で試す。</h2>
+            <p>
+              自動反映をオフにすると仮想カーソルで補正前後を比較できます。
+              RMKへ反映した後は、実際のカーソルで新しい操作感を確かめてください。
+            </p>
+          </div>
+          <div class="preview-shortcuts">SPACE: 補正前 / 補正後<br>C: 中央へ戻す　ESC: 終了</div>
+        </div>
+        <div class="preview-layout">
+          <div class="preview-controls">
+            <div class="section-label">
+              <span>A / B 比較</span>
+              <span>Space</span>
+            </div>
+            <div class="mode-switch">
+              <button id="rawModeButton" type="button">補正前</button>
+              <button id="correctedModeButton" class="selected" type="button">補正後</button>
+            </div>
+            <div class="preview-stat">
+              <strong id="targetHits">0</strong>
+              <span>ターゲット到達</span>
+            </div>
+            <button id="recenterButton" class="ghost" type="button">カーソルを中央へ</button>
+            <p class="preview-hint">
+              円の中でクリックすると次のターゲットへ進みます。
+              上下左右・斜めを往復して、狙った方向へ迷わず動くか確認できます。
+            </p>
+          </div>
+          <div id="previewPad" class="preview-pad" aria-label="補正行列の操作感プレビュー">
+            <span id="previewLiveMode" class="preview-live-mode">補正後</span>
+            <div id="previewTarget" class="preview-target">TARGET</div>
+            <div id="virtualCursor" class="virtual-cursor"></div>
+            <button id="previewStart" class="preview-start" type="button">操作感プレビューを開始</button>
+          </div>
+        </div>
+      </section>
+    </section>
+
+  </main>
+
+  <div id="toast" class="toast" role="status">コピーしました</div>
+
+  <script>
+    "use strict";
+
+    const directions = [
+      { label: "右", symbol: "→", x: 1, y: 0 },
+      { label: "左", symbol: "←", x: -1, y: 0 },
+      { label: "下", symbol: "↓", x: 0, y: 1 },
+      { label: "上", symbol: "↑", x: 0, y: -1 }
+    ];
+
+    const stage = document.getElementById("stage");
+    const startButton = document.getElementById("startButton");
+    const resetButton = document.getElementById("resetButton");
+    const resultResetButton = document.getElementById("resultResetButton");
+    const stageMessage = document.getElementById("stageMessage");
+    const directionArrow = document.getElementById("directionArrow");
+    const directionList = document.getElementById("directionList");
+    const progressText = document.getElementById("progressText");
+    const observedVector = document.getElementById("observedVector");
+    const traceToggle = document.getElementById("traceToggle");
+    const captureMode = document.getElementById("captureMode");
+    const results = document.getElementById("results");
+    const sensitivity = document.getElementById("sensitivity");
+    const sensitivityValue = document.getElementById("sensitivityValue");
+    const toast = document.getElementById("toast");
+    const previewPad = document.getElementById("previewPad");
+    const previewStart = document.getElementById("previewStart");
+    const virtualCursor = document.getElementById("virtualCursor");
+    const previewTarget = document.getElementById("previewTarget");
+    const previewLiveMode = document.getElementById("previewLiveMode");
+    const rawModeButton = document.getElementById("rawModeButton");
+    const correctedModeButton = document.getElementById("correctedModeButton");
+    const recenterButton = document.getElementById("recenterButton");
+    const targetHits = document.getElementById("targetHits");
+    const connectDeviceButton = document.getElementById("connectDevice");
+    const deviceStatus = document.getElementById("deviceStatus");
+    const deviceDetail = document.getElementById("deviceDetail");
+    const readMatrixButton = document.getElementById("readMatrix");
+    const applyMatrixButton = document.getElementById("applyMatrix");
+    const profileCpiProfile = document.getElementById("profileCpiProfile");
+    const profileCpiSlider = document.getElementById("profileCpiSlider");
+    const profileCpiValue = document.getElementById("profileCpiValue");
+    const cpiSaveState = document.getElementById("cpiSaveState");
+
+    let samples = [];
+    let active = false;
+    let phase = "idle";
+    let currentIndex = 0;
+    let sumX = 0;
+    let sumY = 0;
+    let pathLength = 0;
+    let idleTimer = 0;
+    let fittedBase = null;
+    let resultSamples = [];
+    let previousRoundFit = null;
+    let stableRoundCount = 0;
+    let gestureAttempts = 0;
+    let stoppedAtLimit = false;
+    let copyPayloads = {};
+    let showObservedVector = false;
+    let previewActive = false;
+    let previewMode = "corrected";
+    let previewX = 0;
+    let previewY = 0;
+    let previewTargetIndex = 0;
+    let hitCount = 0;
+    let hidDevice = null;
+    let pendingHidRequest = null;
+    let calibrationMacroOffset = null;
+    let profileCpiMacroOffset = null;
+    let profileCpiValues = [];
+    let profileCpiSaveTimer = 0;
+    let profileCpiSaveRevision = 0;
+    let profileCpiSavedRevision = 0;
+    let profileCpiWriteInFlight = false;
+    let autoApplyTimer = 0;
+    let lastReplacement = null;
+    let resultApplied = false;
+
+    const MIN_ROUNDS = 3;
+    const MAX_ROUNDS = 10;
+    const MAX_GESTURE_ATTEMPTS = 60;
+    const MIN_INLIERS_PER_DIRECTION = 3;
+    const TARGET_RMS_DEGREES = 6;
+    const MAX_FIT_DRIFT_DEGREES = 1.5;
+    const REQUIRED_STABLE_ROUNDS = 2;
+
+    const REEL_VENDOR_ID = 0x4c4b;
+    const REEL_PRODUCT_ID = 0x524d;
+    const VIA_GET_MACRO_BUFFER_SIZE = 0x0d;
+    const VIA_GET_MACRO_BUFFER = 0x0e;
+    const VIA_SET_MACRO_BUFFER = 0x0f;
+    const CALIBRATION_BLOB_SIZE = 28;
+    const CALIBRATION_SCALE = 1000;
+    const CALIBRATION_MAGIC = [0x52, 0x4c, 0x43, 0x31];
+    const PROFILE_CPI_BLOB_SIZE = 24;
+    const PROFILE_CPI_MAGIC = [0x52, 0x43, 0x50, 0x31];
+    const PROFILE_CPI_COUNT = 5;
+    const PROFILE_CPI_MIN = 200;
+    const PROFILE_CPI_MAX = 3200;
+    const PROFILE_CPI_STEP = 200;
+    const DEFAULT_PROFILE_CPI = Array(PROFILE_CPI_COUNT).fill(1600);
+    const DEFAULT_FIRMWARE_MATRIX = [
+      [-0.265, 1.142],
+      [-0.831, 0.562]
+    ];
+
+    const previewTargets = [
+      [0.78, 0.22],
+      [0.22, 0.78],
+      [0.82, 0.68],
+      [0.18, 0.32],
+      [0.50, 0.16],
+      [0.50, 0.84],
+      [0.16, 0.50],
+      [0.84, 0.50]
+    ];
+
+    function setDeviceState(state, label, detail = "") {
+      deviceStatus.dataset.state = state;
+      deviceStatus.textContent = label;
+      if (detail) deviceDetail.textContent = detail;
+      const connected = Boolean(hidDevice?.opened) && state !== "idle";
+      readMatrixButton.disabled = !connected;
+      applyMatrixButton.disabled = !connected || resultApplied;
+      profileCpiProfile.disabled = !connected;
+      profileCpiSlider.disabled = !connected;
+      connectDeviceButton.textContent = connected ? "切断" : "ワイヤレス接続";
+      if (!connected) setCpiSaveState("接続待ち");
+    }
+
+    function setCpiSaveState(label, state = "") {
+      cpiSaveState.textContent = label;
+      cpiSaveState.classList.toggle("dirty", state === "dirty");
+      cpiSaveState.classList.toggle("saved", state === "saved");
+    }
+
+    function currentProfileCpi() {
+      return [...profileCpiValues];
+    }
+
+    function setProfileCpiInputs(values) {
+      profileCpiValues = [...values];
+      renderProfileCpiControl();
+    }
+
+    function renderProfileCpiControl() {
+      const profile = Number(profileCpiProfile.value);
+      const cpi = profileCpiValues[profile];
+      profileCpiSlider.value = String(cpi);
+      profileCpiValue.textContent = `${cpi} CPI`;
+    }
+
+    function setMatrixInputs(matrix) {
+      const values = [matrix[0][0], matrix[0][1], matrix[1][0], matrix[1][1]];
+      ["f00", "f01", "f10", "f11"].forEach((id, index) => {
+        document.getElementById(id).value = formatNumber(values[index], 6);
+      });
+    }
+
+    function fnv1a(bytes) {
+      let hash = 0x811c9dc5;
+      for (const byte of bytes) {
+        hash = Math.imul(hash ^ byte, 0x01000193) >>> 0;
+      }
+      return hash;
+    }
+
+    function matrixToFixed(matrix) {
+      const values = [
+        matrix[0][0],
+        matrix[0][1],
+        matrix[1][0],
+        matrix[1][1]
+      ].map(value => Math.round(value * CALIBRATION_SCALE));
+      if (values.some(value => !Number.isSafeInteger(value) || Math.abs(value) > 16000)) {
+        throw new Error("係数が安全範囲を超えています");
+      }
+      const determinant = values[0] * values[3] - values[1] * values[2];
+      if (Math.abs(determinant) < 10000) {
+        throw new Error("行列が特異に近すぎます");
+      }
+      return values;
+    }
+
+    function encodeCalibrationBlob(matrix) {
+      const fixed = matrixToFixed(matrix);
+      const bytes = new Uint8Array(CALIBRATION_BLOB_SIZE);
+      bytes.set(CALIBRATION_MAGIC, 0);
+      bytes[4] = 1;
+      const view = new DataView(bytes.buffer);
+      view.setUint16(6, CALIBRATION_SCALE, true);
+      fixed.forEach((value, index) => view.setInt32(8 + index * 4, value, true));
+      view.setUint32(24, fnv1a(bytes.subarray(0, 24)), true);
+      return bytes;
+    }
+
+    function decodeCalibrationBlob(bytes) {
+      if (bytes.length !== CALIBRATION_BLOB_SIZE) return null;
+      if (!CALIBRATION_MAGIC.every((value, index) => bytes[index] === value)) return null;
+      if (bytes[4] !== 1 || bytes[5] !== 0) return null;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (view.getUint16(6, true) !== CALIBRATION_SCALE) return null;
+      if (view.getUint32(24, true) !== fnv1a(bytes.subarray(0, 24))) return null;
+      const values = Array.from({ length: 4 }, (_, index) => view.getInt32(8 + index * 4, true));
+      const matrix = [
+        [values[0] / CALIBRATION_SCALE, values[1] / CALIBRATION_SCALE],
+        [values[2] / CALIBRATION_SCALE, values[3] / CALIBRATION_SCALE]
+      ];
+      try {
+        matrixToFixed(matrix);
+        return matrix;
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function validateProfileCpi(values) {
+      if (values.length !== PROFILE_CPI_COUNT) {
+        throw new Error("CPIプロファイル数が一致しません");
+      }
+      if (values.some(cpi => !Number.isInteger(cpi)
+        || cpi < PROFILE_CPI_MIN
+        || cpi > PROFILE_CPI_MAX
+        || cpi % PROFILE_CPI_STEP !== 0)) {
+        throw new Error(`CPIは${PROFILE_CPI_MIN}〜${PROFILE_CPI_MAX}の${PROFILE_CPI_STEP}刻みで指定してください`);
+      }
+      return values;
+    }
+
+    function encodeProfileCpiBlob(values) {
+      validateProfileCpi(values);
+      const bytes = new Uint8Array(PROFILE_CPI_BLOB_SIZE);
+      const view = new DataView(bytes.buffer);
+      bytes.set(PROFILE_CPI_MAGIC, 0);
+      bytes[4] = 1;
+      bytes[5] = PROFILE_CPI_COUNT;
+      view.setUint16(6, PROFILE_CPI_STEP, true);
+      values.forEach((cpi, index) => view.setUint16(8 + index * 2, cpi, true));
+      view.setUint32(20, fnv1a(bytes.subarray(0, 20)), true);
+      return bytes;
+    }
+
+    function decodeProfileCpiBlob(bytes) {
+      if (bytes.length !== PROFILE_CPI_BLOB_SIZE) return null;
+      if (!PROFILE_CPI_MAGIC.every((value, index) => bytes[index] === value)) return null;
+      if (bytes[4] !== 1 || bytes[5] !== PROFILE_CPI_COUNT) return null;
+      const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+      if (view.getUint16(6, true) !== PROFILE_CPI_STEP) return null;
+      if (bytes[18] !== 0 || bytes[19] !== 0) return null;
+      if (view.getUint32(20, true) !== fnv1a(bytes.subarray(0, 20))) return null;
+      const values = Array.from(
+        { length: PROFILE_CPI_COUNT },
+        (_, index) => view.getUint16(8 + index * 2, true)
+      );
+      try {
+        return validateProfileCpi(values);
+      } catch (error) {
+        return null;
+      }
+    }
+
+    function handleHidInputReport(event) {
+      if (!pendingHidRequest || event.device !== hidDevice) return;
+      const response = new Uint8Array(
+        event.data.buffer,
+        event.data.byteOffset,
+        event.data.byteLength
+      );
+      if (response[0] !== pendingHidRequest.command) return;
+      window.clearTimeout(pendingHidRequest.timeout);
+      const resolve = pendingHidRequest.resolve;
+      pendingHidRequest = null;
+      resolve(new Uint8Array(response));
+    }
+
+    function cancelPendingHidRequest(message) {
+      if (!pendingHidRequest) return;
+      window.clearTimeout(pendingHidRequest.timeout);
+      const reject = pendingHidRequest.reject;
+      pendingHidRequest = null;
+      reject(new Error(message));
+    }
+
+    async function sendViaPacket(packet) {
+      if (!hidDevice?.opened) throw new Error("ReeLが接続されていません");
+      if (pendingHidRequest) throw new Error("前の設定通信が完了していません");
+      const response = new Promise((resolve, reject) => {
+        const timeout = window.setTimeout(() => {
+          pendingHidRequest = null;
+          reject(new Error("ReeLから応答がありません"));
+        }, 1800);
+        pendingHidRequest = { command: packet[0], resolve, reject, timeout };
+      });
+      try {
+        await hidDevice.sendReport(0, packet);
+      } catch (error) {
+        window.clearTimeout(pendingHidRequest?.timeout);
+        pendingHidRequest = null;
+        throw error;
+      }
+      return response;
+    }
+
+    async function discoverCalibrationOffset() {
+      const packet = new Uint8Array(32);
+      packet[0] = VIA_GET_MACRO_BUFFER_SIZE;
+      const response = await sendViaPacket(packet);
+      const macroSize = response[1] * 256 + response[2];
+      const requiredSize = CALIBRATION_BLOB_SIZE + PROFILE_CPI_BLOB_SIZE;
+      if (macroSize < requiredSize) {
+        throw new Error(`RMKの設定領域が不足しています (${macroSize} bytes)`);
+      }
+      calibrationMacroOffset = macroSize - CALIBRATION_BLOB_SIZE;
+      profileCpiMacroOffset = calibrationMacroOffset - PROFILE_CPI_BLOB_SIZE;
+      return calibrationMacroOffset;
+    }
+
+    async function readCalibrationFromDevice(announce = true) {
+      const offset = calibrationMacroOffset ?? await discoverCalibrationOffset();
+      const packet = new Uint8Array(32);
+      packet[0] = VIA_GET_MACRO_BUFFER;
+      packet[1] = offset >> 8;
+      packet[2] = offset & 0xff;
+      packet[3] = CALIBRATION_BLOB_SIZE;
+      const response = await sendViaPacket(packet);
+      const matrix = decodeCalibrationBlob(response.slice(4, 4 + CALIBRATION_BLOB_SIZE));
+      if (!matrix) throw new Error("保存済み調整値を検証できません");
+      setMatrixInputs(matrix);
+      resetSession(true);
+      deviceDetail.textContent = `保存値を読込済み · macro offset ${offset}`;
+      if (announce) showToast("RMKから調整値を読み込みました");
+      return matrix;
+    }
+
+    async function writeCalibrationToDevice(matrix, automatic = false) {
+      const offset = calibrationMacroOffset ?? await discoverCalibrationOffset();
+      const blob = encodeCalibrationBlob(matrix);
+      const packet = new Uint8Array(32);
+      packet[0] = VIA_SET_MACRO_BUFFER;
+      packet[1] = offset >> 8;
+      packet[2] = offset & 0xff;
+      packet[3] = CALIBRATION_BLOB_SIZE;
+      packet.set(blob, 4);
+      await sendViaPacket(packet);
+      setMatrixInputs(matrix);
+      resultApplied = Boolean(lastReplacement);
+      applyMatrixButton.disabled = resultApplied;
+      sensitivity.disabled = resultApplied;
+      deviceDetail.textContent = automatic
+        ? "計測結果を自動保存しました。約25ms以内に新しい操作感へ切り替わります。"
+        : "行列をFlashへ保存しました。約25ms以内に新しい操作感へ切り替わります。";
+      showToast(automatic ? "RMKへ自動反映しました" : "RMKへ保存・反映しました");
+      if (resultApplied) {
+        document.getElementById("resultSummary").textContent =
+          "この結果はRMKへ保存済みです。続けて調整する場合は再計測してください";
+      }
+    }
+
+    async function readProfileCpiFromDevice(announce = true) {
+      if (profileCpiMacroOffset === null) await discoverCalibrationOffset();
+      const offset = profileCpiMacroOffset;
+      const packet = new Uint8Array(32);
+      packet[0] = VIA_GET_MACRO_BUFFER;
+      packet[1] = offset >> 8;
+      packet[2] = offset & 0xff;
+      packet[3] = PROFILE_CPI_BLOB_SIZE;
+      const response = await sendViaPacket(packet);
+      const values = decodeProfileCpiBlob(response.slice(4, 4 + PROFILE_CPI_BLOB_SIZE));
+      if (!values) throw new Error("保存済みCPI設定を検証できません");
+      setProfileCpiInputs(values);
+      profileCpiSaveRevision = 0;
+      profileCpiSavedRevision = 0;
+      setCpiSaveState("同期済み", "saved");
+      if (announce) showToast("RMKからCPI設定を読み込みました");
+      return values;
+    }
+
+    async function writeProfileCpiToDevice(values) {
+      if (profileCpiMacroOffset === null) await discoverCalibrationOffset();
+      const blob = encodeProfileCpiBlob(values);
+      const packet = new Uint8Array(32);
+      packet[0] = VIA_SET_MACRO_BUFFER;
+      packet[1] = profileCpiMacroOffset >> 8;
+      packet[2] = profileCpiMacroOffset & 0xff;
+      packet[3] = PROFILE_CPI_BLOB_SIZE;
+      packet.set(blob, 4);
+      await sendViaPacket(packet);
+    }
+
+    function scheduleProfileCpiSave() {
+      profileCpiSaveRevision += 1;
+      window.clearTimeout(profileCpiSaveTimer);
+      setCpiSaveState("保存中");
+      profileCpiSaveTimer = window.setTimeout(flushProfileCpiSave, 250);
+    }
+
+    async function flushProfileCpiSave() {
+      if (profileCpiWriteInFlight || profileCpiSavedRevision === profileCpiSaveRevision) return;
+      if (!hidDevice?.opened) {
+        setCpiSaveState("接続待ち", "dirty");
+        return;
+      }
+
+      const revision = profileCpiSaveRevision;
+      const values = currentProfileCpi();
+      profileCpiWriteInFlight = true;
+      try {
+        await writeProfileCpiToDevice(values);
+        profileCpiSavedRevision = revision;
+        if (revision === profileCpiSaveRevision) setCpiSaveState("保存済み", "saved");
+      } catch (error) {
+        profileCpiSavedRevision = revision;
+        setCpiSaveState("保存失敗", "dirty");
+        showToast(error.message);
+      } finally {
+        profileCpiWriteInFlight = false;
+        if (profileCpiSavedRevision !== profileCpiSaveRevision) {
+          window.clearTimeout(profileCpiSaveTimer);
+          profileCpiSaveTimer = window.setTimeout(flushProfileCpiSave, 100);
+        }
+      }
+    }
+
+    function scheduleAutoApply(matrix) {
+      lastReplacement = matrix;
+      if (!hidDevice?.opened || resultApplied) return;
+      window.clearTimeout(autoApplyTimer);
+      autoApplyTimer = window.setTimeout(async () => {
+        try {
+          await writeCalibrationToDevice(matrix, true);
+        } catch (error) {
+          setDeviceState("error", "RMK 書込失敗", error.message);
+          showToast(error.message);
+        }
+      }, 900);
+    }
+
+    function hasViaCollection(device) {
+      const visit = collection => collection.usagePage === 0xff60
+        || (collection.children || []).some(visit);
+      return (device.collections || []).some(visit);
+    }
+
+    async function attachHidDevice(device) {
+      if (!device.opened) await device.open();
+      if (hidDevice && hidDevice !== device) {
+        hidDevice.removeEventListener("inputreport", handleHidInputReport);
+      }
+      hidDevice = device;
+      hidDevice.addEventListener("inputreport", handleHidInputReport);
+      calibrationMacroOffset = null;
+      profileCpiMacroOffset = null;
+      setDeviceState("connected", "RMK 接続済み", "保存済み設定を読み込んでいます…");
+      try {
+        await readCalibrationFromDevice(false);
+        await readProfileCpiFromDevice(false);
+        deviceDetail.textContent = "較正行列とBTプロファイル別CPIを読み込みました。";
+        showToast("RMKから設定を読み込みました");
+      } catch (error) {
+        setDeviceState("error", "RMK 読込失敗", error.message);
+        throw error;
+      }
+    }
+
+    async function connectOrDisconnectDevice() {
+      if (!("hid" in navigator)) {
+        setDeviceState("error", "WebHID 非対応", "ChromeまたはEdgeの最新版で開いてください。");
+        return;
+      }
+      connectDeviceButton.disabled = true;
+      try {
+        if (hidDevice?.opened) {
+          cancelPendingHidRequest("ReeLとの接続を切断しました");
+          hidDevice.removeEventListener("inputreport", handleHidInputReport);
+          await hidDevice.close();
+          hidDevice = null;
+          calibrationMacroOffset = null;
+          profileCpiMacroOffset = null;
+          window.clearTimeout(profileCpiSaveTimer);
+          setDeviceState("idle", "RMK 未接続", "切断しました。計測機能はオフラインでも利用できます。");
+          return;
+        }
+        const devices = await navigator.hid.requestDevice({
+          filters: [{ vendorId: REEL_VENDOR_ID, productId: REEL_PRODUCT_ID }]
+        });
+        const device = devices.find(hasViaCollection) || devices[0];
+        if (!device) return;
+        await attachHidDevice(device);
+      } catch (error) {
+        setDeviceState("error", "RMK 接続失敗", error.message);
+        showToast(error.message);
+      } finally {
+        connectDeviceButton.disabled = false;
+      }
+    }
+
+    async function reconnectAuthorizedDevice() {
+      if (!("hid" in navigator)) {
+        setDeviceState("error", "WebHID 非対応", "ChromeまたはEdgeの最新版で開いてください。");
+        return;
+      }
+      const devices = await navigator.hid.getDevices();
+      const device = devices.find(candidate =>
+        candidate.vendorId === REEL_VENDOR_ID
+        && candidate.productId === REEL_PRODUCT_ID
+        && hasViaCollection(candidate)
+      );
+      if (!device) return;
+      try {
+        await attachHidDevice(device);
+      } catch (error) {
+        setDeviceState("error", "RMK 再接続失敗", error.message);
+      }
+    }
+
+    function renderDirectionList() {
+      directionList.replaceChildren();
+      const completedInRound = samples.length % directions.length;
+      const allComplete = phase === "complete";
+      const activeDirection = currentIndex % directions.length;
+      directions.forEach((direction, index) => {
+        const chip = document.createElement("div");
+        chip.className = "direction-chip";
+        chip.textContent = direction.symbol;
+        chip.title = direction.label;
+        chip.setAttribute("aria-label", direction.label);
+        if (allComplete || index < completedInRound) chip.classList.add("done");
+        if (active && index === activeDirection) chip.classList.add("active");
+        directionList.append(chip);
+      });
+      const completedRounds = Math.floor(samples.length / directions.length);
+      const visibleRound = allComplete
+        ? Math.max(1, Math.ceil(samples.length / directions.length))
+        : Math.min(MAX_ROUNDS, completedRounds + 1);
+      progressText.textContent = `${samples.length}回 · ${visibleRound}/${MAX_ROUNDS}周`;
+    }
+
+    function setObservedVector(x, y) {
+      const length = Math.hypot(x, y);
+      if (!showObservedVector || length < 0.01) {
+        observedVector.setAttribute("opacity", "0");
+        return;
+      }
+      const displayLength = Math.min(132, 30 + Math.sqrt(length) * 13);
+      observedVector.setAttribute("x2", String(x / length * displayLength));
+      observedVector.setAttribute("y2", String(y / length * displayLength));
+      observedVector.setAttribute("opacity", "1");
+    }
+
+    function setPrompt(message) {
+      stageMessage.innerHTML = message;
+    }
+
+    async function requestCapture() {
+      if (!active) {
+        resetSession(false);
+        active = true;
+        currentIndex = 0;
+      }
+
+      startButton.hidden = true;
+      stage.classList.remove("stage-idle");
+      renderDirectionList();
+
+      try {
+        await stage.requestPointerLock({ unadjustedMovement: true });
+        captureMode.textContent = "Pointer Lock / raw input";
+      } catch (error) {
+        try {
+          await stage.requestPointerLock();
+          captureMode.textContent = "Pointer Lock / 標準入力";
+        } catch (fallbackError) {
+          active = false;
+          startButton.hidden = false;
+          startButton.textContent = "もう一度試す";
+          stage.classList.add("stage-idle");
+          setPrompt("Pointer Lock エラー");
+        }
+      }
+    }
+
+    function prepareDirection(roundSummary = "") {
+      clearTimeout(idleTimer);
+      sumX = 0;
+      sumY = 0;
+      pathLength = 0;
+      setObservedVector(0, 0);
+
+      const direction = directions[currentIndex % directions.length];
+      directionArrow.textContent = direction.symbol;
+      phase = "waiting";
+      setPrompt(roundSummary);
+      renderDirectionList();
+    }
+
+    function handleMovement(event) {
+      if (!active || document.pointerLockElement !== stage) return;
+      if (phase !== "waiting" && phase !== "measuring") return;
+
+      const dx = Number(event.movementX) || 0;
+      const dy = Number(event.movementY) || 0;
+      if (dx === 0 && dy === 0) return;
+
+      phase = "measuring";
+      sumX += dx;
+      sumY += dy;
+      pathLength += Math.hypot(dx, dy);
+      setObservedVector(sumX, sumY);
+      setPrompt("計測中");
+
+      clearTimeout(idleTimer);
+      idleTimer = window.setTimeout(finishGesture, 380);
+    }
+
+    function finishGesture() {
+      if (!active || phase !== "measuring") return;
+      const distance = Math.hypot(sumX, sumY);
+      const straightness = distance / Math.max(pathLength, distance);
+      gestureAttempts += 1;
+
+      if (distance < 40) {
+        phase = "waiting";
+        sumX = 0;
+        sumY = 0;
+        pathLength = 0;
+        setObservedVector(0, 0);
+        if (gestureAttempts >= MAX_GESTURE_ATTEMPTS) {
+          completeSession(null, "試行上限");
+          return;
+        }
+        setPrompt("もう一度");
+        return;
+      }
+
+      if (straightness < 0.82) {
+        phase = "waiting";
+        sumX = 0;
+        sumY = 0;
+        pathLength = 0;
+        setObservedVector(0, 0);
+        if (gestureAttempts >= MAX_GESTURE_ATTEMPTS) {
+          completeSession(null, "試行上限");
+          return;
+        }
+        setPrompt("まっすぐ、もう一度");
+        return;
+      }
+
+      const directionIndex = currentIndex % directions.length;
+      const target = directions[directionIndex];
+      samples.push({
+        dx: sumX,
+        dy: sumY,
+        tx: target.x,
+        ty: target.y,
+        label: target.label,
+        directionIndex,
+        straightness
+      });
+
+      currentIndex += 1;
+      renderDirectionList();
+
+      if (gestureAttempts >= MAX_GESTURE_ATTEMPTS) {
+        completeSession(null, "試行上限");
+        return;
+      }
+
+      let roundSummary = "";
+      if (currentIndex % directions.length === 0) {
+        let assessment;
+        try {
+          assessment = assessCompletedRound();
+        } catch (error) {
+          previousRoundFit = null;
+          stableRoundCount = 0;
+          const completedRound = currentIndex / directions.length;
+          if (completedRound >= MAX_ROUNDS) {
+            completeSession(null, "周回上限");
+            return;
+          }
+          prepareDirection();
+          return;
+        }
+        fittedBase = assessment.matrix;
+        const completedRound = currentIndex / directions.length;
+
+        if (assessment.converged) {
+          completeSession(assessment);
+          return;
+        }
+        if (completedRound >= MAX_ROUNDS) {
+          completeSession(assessment, "周回上限");
+          return;
+        }
+
+        roundSummary = `${completedRound}/${MAX_ROUNDS}周 · RMS ${assessment.rms.toFixed(1)}°`;
+      }
+      prepareDirection(roundSummary);
+    }
+
+    function completeSession(assessment = null, limitReason = "") {
+      active = false;
+      phase = "complete";
+      resultApplied = false;
+      stoppedAtLimit = Boolean(limitReason);
+      sensitivity.disabled = false;
+      applyMatrixButton.disabled = !hidDevice?.opened;
+      clearTimeout(idleTimer);
+      directionArrow.textContent = "✓";
+      renderDirectionList();
+      if (document.pointerLockElement === stage) document.exitPointerLock();
+
+      try {
+        const finalAssessment = assessment || fitReliableCorrection(samples);
+        fittedBase = finalAssessment.matrix;
+        resultSamples = finalAssessment.inliers;
+        setPrompt(limitReason || "完了");
+        renderResults();
+        results.classList.add("visible");
+        results.hidden = false;
+        document.getElementById("calibration").hidden = true;
+        document.getElementById("profileCpi").hidden = true;
+        window.setTimeout(() => {
+          recenterPreview();
+          placePreviewTarget();
+        }, 120);
+      } catch (error) {
+        fittedBase = null;
+        startButton.hidden = false;
+        startButton.textContent = "計測をやり直す";
+        setPrompt("再計測してください");
+      }
+    }
+
+    function resetSession(hideResults = true) {
+      active = false;
+      phase = "idle";
+      resultApplied = false;
+      lastReplacement = null;
+      resultSamples = [];
+      previousRoundFit = null;
+      stableRoundCount = 0;
+      gestureAttempts = 0;
+      stoppedAtLimit = false;
+      sensitivity.disabled = false;
+      applyMatrixButton.disabled = !hidDevice?.opened;
+      window.clearTimeout(autoApplyTimer);
+      samples = [];
+      currentIndex = 0;
+      sumX = 0;
+      sumY = 0;
+      pathLength = 0;
+      fittedBase = null;
+      clearTimeout(idleTimer);
+      if (document.pointerLockElement === stage) document.exitPointerLock();
+      if (document.pointerLockElement === previewPad) document.exitPointerLock();
+      previewActive = false;
+      previewStart.hidden = false;
+      previewStart.textContent = "操作感プレビューを開始";
+
+      directionArrow.textContent = "→";
+      startButton.hidden = false;
+      startButton.textContent = "計測開始";
+      stage.classList.add("stage-idle");
+      setObservedVector(0, 0);
+      setPrompt("");
+      if (hideResults) {
+        results.classList.remove("visible");
+        results.hidden = true;
+        document.getElementById("calibration").hidden = false;
+        document.getElementById("profileCpi").hidden = false;
+      }
+      renderDirectionList();
+    }
+
+    function previewCorrection() {
+      if (previewMode === "raw" || !fittedBase || resultApplied) return [[1, 0], [0, 1]];
+      return fittedBase;
+    }
+
+    function previewGain() {
+      if (previewMode === "raw" || !fittedBase || resultApplied) return 1;
+      return Number(sensitivity.value) / 100;
+    }
+
+    function updatePreviewCursor() {
+      const bounds = previewPad.getBoundingClientRect();
+      if (bounds.width === 0 || bounds.height === 0) return;
+      virtualCursor.style.left = `${previewX}px`;
+      virtualCursor.style.top = `${previewY}px`;
+
+      const target = previewTargets[previewTargetIndex];
+      const targetX = target[0] * bounds.width;
+      const targetY = target[1] * bounds.height;
+      const isHot = Math.hypot(previewX - targetX, previewY - targetY) <= 34;
+      previewTarget.classList.toggle("hot", isHot);
+    }
+
+    function recenterPreview() {
+      const bounds = previewPad.getBoundingClientRect();
+      previewX = bounds.width / 2;
+      previewY = bounds.height / 2;
+      updatePreviewCursor();
+    }
+
+    function placePreviewTarget() {
+      const target = previewTargets[previewTargetIndex];
+      previewTarget.style.left = `${target[0] * 100}%`;
+      previewTarget.style.top = `${target[1] * 100}%`;
+      updatePreviewCursor();
+    }
+
+    function setPreviewMode(mode) {
+      previewMode = mode;
+      const corrected = mode === "corrected";
+      rawModeButton.classList.toggle("selected", !corrected);
+      correctedModeButton.classList.toggle("selected", corrected);
+      previewPad.classList.toggle("raw", !corrected);
+      previewLiveMode.textContent = corrected ? "補正後" : "補正前";
+    }
+
+    async function requestPreviewCapture() {
+      if (!fittedBase) return;
+      previewActive = true;
+      previewStart.hidden = true;
+      try {
+        await previewPad.requestPointerLock({ unadjustedMovement: true });
+      } catch (error) {
+        try {
+          await previewPad.requestPointerLock();
+        } catch (fallbackError) {
+          previewActive = false;
+          previewStart.hidden = false;
+          previewStart.textContent = "もう一度試す";
+          showToast("Pointer Lockを開始できませんでした");
+        }
+      }
+    }
+
+    function handlePreviewMovement(event) {
+      if (!previewActive || document.pointerLockElement !== previewPad) return;
+      const dx = Number(event.movementX) || 0;
+      const dy = Number(event.movementY) || 0;
+      if (dx === 0 && dy === 0) return;
+
+      const transformed = applyLengthPreservingMatrix(previewCorrection(), dx, dy)
+        .map(value => value * previewGain());
+      const bounds = previewPad.getBoundingClientRect();
+      const margin = 11;
+      previewX = Math.max(margin, Math.min(bounds.width - margin, previewX + transformed[0]));
+      previewY = Math.max(margin, Math.min(bounds.height - margin, previewY + transformed[1]));
+      updatePreviewCursor();
+    }
+
+    function tryPreviewHit(event) {
+      if (!previewActive || document.pointerLockElement !== previewPad || event.button !== 0) return;
+      if (!previewTarget.classList.contains("hot")) return;
+      hitCount += 1;
+      targetHits.textContent = String(hitCount);
+      previewTargetIndex = (previewTargetIndex + 1) % previewTargets.length;
+      placePreviewTarget();
+    }
+
+    function applyMatrix(matrix, x, y) {
+      return [
+        matrix[0][0] * x + matrix[0][1] * y,
+        matrix[1][0] * x + matrix[1][1] * y
+      ];
+    }
+
+    function applyLengthPreservingMatrix(matrix, x, y) {
+      const inputLength = Math.hypot(x, y);
+      if (inputLength < 1e-12) return [0, 0];
+
+      const transformed = applyMatrix(matrix, x, y);
+      const transformedLength = Math.hypot(transformed[0], transformed[1]);
+      if (transformedLength < 1e-12) return [0, 0];
+
+      const scale = inputLength / transformedLength;
+      return [transformed[0] * scale, transformed[1] * scale];
+    }
+
+    function multiplyMatrices(left, right) {
+      return [
+        [
+          left[0][0] * right[0][0] + left[0][1] * right[1][0],
+          left[0][0] * right[0][1] + left[0][1] * right[1][1]
+        ],
+        [
+          left[1][0] * right[0][0] + left[1][1] * right[1][0],
+          left[1][0] * right[0][1] + left[1][1] * right[1][1]
+        ]
+      ];
+    }
+
+    function scaleMatrix(matrix, scalar) {
+      return matrix.map(row => row.map(value => value * scalar));
+    }
+
+    function angleError(matrix, sample) {
+      const [x, y] = applyMatrix(matrix, sample.dx, sample.dy);
+      const length = Math.hypot(x, y);
+      if (length < 1e-12) return Math.PI;
+      const cosine = Math.max(-1, Math.min(1, (x * sample.tx + y * sample.ty) / length));
+      return Math.acos(cosine);
+    }
+
+    function robustAxis(inputSamples, axis) {
+      const aligned = inputSamples
+        .filter(sample => axis === "x" ? Math.abs(sample.tx) > 0.5 : Math.abs(sample.ty) > 0.5)
+        .map(sample => {
+          const length = Math.hypot(sample.dx, sample.dy);
+          if (length < 1e-9) return null;
+          const sign = axis === "x" ? Math.sign(sample.tx) : Math.sign(sample.ty);
+          return {
+            x: sample.dx / length * sign,
+            y: sample.dy / length * sign,
+            quality: Math.max(0.25, Math.min(1, sample.straightness ?? 1))
+          };
+        })
+        .filter(Boolean);
+
+      if (aligned.length < 2) throw new Error(`Not enough ${axis}-axis samples`);
+
+      let x = aligned.reduce((sum, sample) => sum + sample.x, 0);
+      let y = aligned.reduce((sum, sample) => sum + sample.y, 0);
+      let length = Math.hypot(x, y);
+      if (length < 1e-9) throw new Error(`Unstable ${axis}-axis samples`);
+      x /= length;
+      y /= length;
+
+      const huber = 8 * Math.PI / 180;
+      for (let pass = 0; pass < 8; pass += 1) {
+        let weightedX = 0;
+        let weightedY = 0;
+        let totalWeight = 0;
+        aligned.forEach(sample => {
+          const cosine = Math.max(-1, Math.min(1, x * sample.x + y * sample.y));
+          const error = Math.acos(cosine);
+          const robustWeight = error <= huber ? 1 : huber / error;
+          const weight = sample.quality * robustWeight;
+          weightedX += sample.x * weight;
+          weightedY += sample.y * weight;
+          totalWeight += weight;
+        });
+        length = Math.hypot(weightedX, weightedY);
+        if (totalWeight < 1e-9 || length < 1e-9) {
+          throw new Error(`Unstable ${axis}-axis fit`);
+        }
+        x = weightedX / length;
+        y = weightedY / length;
+      }
+
+      return [x, y];
+    }
+
+    function fitCorrection(inputSamples) {
+      const horizontal = robustAxis(inputSamples, "x");
+      const vertical = robustAxis(inputSamples, "y");
+      const basisDeterminant = horizontal[0] * vertical[1] - horizontal[1] * vertical[0];
+
+      if (Math.abs(basisDeterminant) < 0.25) {
+        throw new Error("Measured axes are too close together");
+      }
+
+      let fitted = [
+        [vertical[1] / basisDeterminant, -vertical[0] / basisDeterminant],
+        [-horizontal[1] / basisDeterminant, horizontal[0] / basisDeterminant]
+      ];
+
+      const determinant = fitted[0][0] * fitted[1][1] - fitted[0][1] * fitted[1][0];
+      fitted = scaleMatrix(fitted, 1 / Math.sqrt(Math.abs(determinant)));
+      return fitted;
+    }
+
+    function median(values) {
+      if (!values.length) return Infinity;
+      const sorted = values.slice().sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      return sorted.length % 2
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2;
+    }
+
+    function classifyInliers(inputSamples, matrix) {
+      const errors = inputSamples.map(sample => angleError(matrix, sample) * 180 / Math.PI);
+      const center = median(errors);
+      const mad = median(errors.map(error => Math.abs(error - center)));
+      const threshold = Math.max(5, Math.min(15, center + Math.max(2, 3 * 1.4826 * mad)));
+      const inliers = inputSamples.filter((sample, index) => errors[index] <= threshold);
+      return { inliers, errors, threshold };
+    }
+
+    function fitReliableCorrection(inputSamples) {
+      if (inputSamples.length < directions.length) throw new Error("Not enough samples");
+
+      let matrix = fitCorrection(inputSamples);
+      let inliers = inputSamples.slice();
+      let previousSignature = "";
+
+      for (let pass = 0; pass < 3; pass += 1) {
+        const classified = classifyInliers(inputSamples, matrix);
+        const horizontalCount = classified.inliers.filter(sample => Math.abs(sample.tx) > 0.5).length;
+        const verticalCount = classified.inliers.filter(sample => Math.abs(sample.ty) > 0.5).length;
+        if (horizontalCount < 2 || verticalCount < 2) break;
+
+        const signature = classified.inliers.map(sample => inputSamples.indexOf(sample)).join(",");
+        inliers = classified.inliers;
+        matrix = fitCorrection(inliers);
+        if (signature === previousSignature) break;
+        previousSignature = signature;
+      }
+
+      const finalClassified = classifyInliers(inputSamples, matrix);
+      const finalHorizontalCount = finalClassified.inliers.filter(sample => Math.abs(sample.tx) > 0.5).length;
+      const finalVerticalCount = finalClassified.inliers.filter(sample => Math.abs(sample.ty) > 0.5).length;
+      if (finalHorizontalCount >= 2 && finalVerticalCount >= 2) {
+        inliers = finalClassified.inliers;
+        matrix = fitCorrection(inliers);
+      }
+
+      return {
+        matrix,
+        inliers,
+        excluded: inputSamples.length - inliers.length,
+        threshold: finalClassified.threshold,
+        rms: rmsAngle(matrix, inliers)
+      };
+    }
+
+    function matrixDriftDegrees(previous, current, inputSamples) {
+      if (!previous || !inputSamples.length) return Infinity;
+      const changes = inputSamples.map(sample => {
+        const before = applyMatrix(previous, sample.dx, sample.dy);
+        const after = applyMatrix(current, sample.dx, sample.dy);
+        const denominator = Math.hypot(...before) * Math.hypot(...after);
+        if (denominator < 1e-9) return 180;
+        const cosine = Math.max(
+          -1,
+          Math.min(1, (before[0] * after[0] + before[1] * after[1]) / denominator)
+        );
+        return Math.acos(cosine) * 180 / Math.PI;
+      });
+      return median(changes);
+    }
+
+    function assessCompletedRound() {
+      const assessment = fitReliableCorrection(samples);
+      const completedRounds = samples.length / directions.length;
+      const directionCounts = directions.map((direction, index) =>
+        assessment.inliers.filter(sample => sample.directionIndex === index).length
+      );
+      const drift = matrixDriftDegrees(previousRoundFit, assessment.matrix, assessment.inliers);
+      const enoughInliers = completedRounds >= MIN_ROUNDS
+        && directionCounts.every(count => count >= MIN_INLIERS_PER_DIRECTION);
+      const precise = assessment.rms <= TARGET_RMS_DEGREES;
+      const stable = drift <= MAX_FIT_DRIFT_DEGREES;
+
+      stableRoundCount = enoughInliers && precise && stable ? stableRoundCount + 1 : 0;
+      previousRoundFit = assessment.matrix.map(row => row.slice());
+
+      return {
+        ...assessment,
+        completedRounds,
+        directionCounts,
+        drift,
+        enoughInliers,
+        precise,
+        stable,
+        converged: stableRoundCount >= REQUIRED_STABLE_ROUNDS
+      };
+    }
+
+    function currentFirmwareMatrix() {
+      const ids = ["f00", "f01", "f10", "f11"];
+      const values = ids.map(id => Number.parseFloat(document.getElementById(id).value));
+      if (values.some(value => !Number.isFinite(value))) {
+        throw new Error("Invalid firmware matrix");
+      }
+      return [[values[0], values[1]], [values[2], values[3]]];
+    }
+
+    function rmsAngle(matrix, inputSamples = samples) {
+      if (!inputSamples.length) return Infinity;
+      const radians = inputSamples.map(sample => angleError(matrix, sample));
+      return Math.sqrt(radians.reduce((sum, value) => sum + value * value, 0) / radians.length) * 180 / Math.PI;
+    }
+
+    function formatNumber(value, digits = 4) {
+      const safe = Math.abs(value) < 0.5 * 10 ** -digits ? 0 : value;
+      return safe.toFixed(digits).replace(/\.?0+$/, "");
+    }
+
+    function matrixText(matrix) {
+      return [
+        `${formatNumber(matrix[0][0], 6)}\t${formatNumber(matrix[0][1], 6)}`,
+        `${formatNumber(matrix[1][0], 6)}\t${formatNumber(matrix[1][1], 6)}`
+      ].join("\n");
+    }
+
+    function renderMatrix(elementId, matrix) {
+      const element = document.getElementById(elementId);
+      element.innerHTML = `
+        <span class="bracket left"></span>
+        <span>${formatNumber(matrix[0][0])}</span>
+        <span>${formatNumber(matrix[0][1])}</span>
+        <span>${formatNumber(matrix[1][0])}</span>
+        <span>${formatNumber(matrix[1][1])}</span>
+        <span class="bracket right"></span>
+      `;
+    }
+
+    function closestRotation(matrix) {
+      return Math.atan2(
+        matrix[1][0] - matrix[0][1],
+        matrix[0][0] + matrix[1][1]
+      ) * 180 / Math.PI;
+    }
+
+    function buildCode(matrix) {
+      const scale = 1000;
+      const values = matrix.map(row => row.map(value => Math.round(value * scale)));
+      return `pub const MATRIX_SCALE: i64 = ${scale};
+const LENGTH_SCALE: i64 = 64;
+pub const MATRIX_M00: i64 = ${values[0][0]};
+pub const MATRIX_M01: i64 = ${values[0][1]};
+pub const MATRIX_M10: i64 = ${values[1][0]};
+pub const MATRIX_M11: i64 = ${values[1][1]};
+
+fn integer_sqrt(value: u64) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+    let bit_count = 64 - value.leading_zeros();
+    let mut lower = 0;
+    let mut upper = 1u64 << ((bit_count + 1) / 2);
+    while lower + 1 < upper {
+        let middle = (lower + upper) / 2;
+        if middle <= value / middle { lower = middle; } else { upper = middle; }
+    }
+    lower
+}
+
+fn normalize_component(component: i64, raw_length_scaled: u64, transformed_length: u64) -> i64 {
+    let numerator = i128::from(component) * i128::from(raw_length_scaled) * i128::from(MATRIX_SCALE);
+    let denominator = i128::from(transformed_length) * i128::from(LENGTH_SCALE);
+    (numerator / denominator) as i64
+}
+
+let transformed_x_numerator =
+    i64::from(raw_x) * MATRIX_M00
+    + i64::from(raw_y) * MATRIX_M01;
+let transformed_y_numerator =
+    i64::from(raw_x) * MATRIX_M10
+    + i64::from(raw_y) * MATRIX_M11;
+
+let raw_length_squared = {
+    let raw_x = i64::from(raw_x).unsigned_abs();
+    let raw_y = i64::from(raw_y).unsigned_abs();
+    raw_x * raw_x + raw_y * raw_y
+};
+let raw_length_scaled = integer_sqrt(
+    raw_length_squared * (LENGTH_SCALE as u64) * (LENGTH_SCALE as u64),
+);
+let transformed_length_squared = transformed_x_numerator
+    .unsigned_abs()
+    .saturating_mul(transformed_x_numerator.unsigned_abs())
+    .saturating_add(
+        transformed_y_numerator
+            .unsigned_abs()
+            .saturating_mul(transformed_y_numerator.unsigned_abs()),
+    );
+let transformed_length = integer_sqrt(transformed_length_squared);
+let (output_x_numerator, output_y_numerator) = if transformed_length == 0 {
+    (0, 0)
+} else {
+    (
+        normalize_component(transformed_x_numerator, raw_length_scaled, transformed_length),
+        normalize_component(transformed_y_numerator, raw_length_scaled, transformed_length),
+    )
+};
+
+let output_x_numerator = output_x_numerator + self.output_x_remainder;
+let output_y_numerator = output_y_numerator + self.output_y_remainder;
+
+let output_x = output_x_numerator / MATRIX_SCALE;
+let output_y = output_y_numerator / MATRIX_SCALE;
+
+self.output_x_remainder =
+    output_x_numerator - output_x * MATRIX_SCALE;
+self.output_y_remainder =
+    output_y_numerator - output_y * MATRIX_SCALE;`;
+    }
+
+    function plotResults(correction) {
+      const plot = document.getElementById("resultPlot");
+      const radius = 132;
+      const plottedSamples = resultSamples.length ? resultSamples : samples;
+      const background = directions.map(direction => {
+        const x = direction.x * radius;
+        const y = direction.y * radius;
+        return `<line x1="0" y1="0" x2="${x}" y2="${y}"
+          stroke="rgba(21,45,56,.12)" stroke-width="1" stroke-dasharray="4 6"/>
+          <circle cx="${x}" cy="${y}" r="3.5" fill="#152d38"/>`;
+      }).join("");
+
+      const vectors = directions.map((direction, index) => {
+        const group = plottedSamples.filter(sample => sample.directionIndex === index);
+        const average = group.reduce((total, sample) => {
+          const length = Math.hypot(sample.dx, sample.dy) || 1;
+          total[0] += sample.dx / length;
+          total[1] += sample.dy / length;
+          return total;
+        }, [0, 0]);
+        const averageLength = Math.hypot(average[0], average[1]) || 1;
+        const observedX = average[0] / averageLength;
+        const observedY = average[1] / averageLength;
+        const beforeX = observedX * radius;
+        const beforeY = observedY * radius;
+        const corrected = applyMatrix(correction, observedX, observedY);
+        const correctedLength = Math.hypot(corrected[0], corrected[1]) || 1;
+        const afterX = corrected[0] / correctedLength * radius;
+        const afterY = corrected[1] / correctedLength * radius;
+        const targetX = direction.x * radius;
+        const targetY = direction.y * radius;
+        return `
+          <line x1="0" y1="0" x2="${beforeX}" y2="${beforeY}"
+            stroke="#ef6a53" stroke-width="2.2" stroke-linecap="round" opacity=".72"/>
+          <circle cx="${beforeX}" cy="${beforeY}" r="5" fill="#ef6a53" opacity=".9"/>
+          <line x1="${beforeX}" y1="${beforeY}" x2="${targetX}" y2="${targetY}"
+            stroke="#ef6a53" stroke-width="1" stroke-dasharray="3 5" opacity=".38"/>
+          <line x1="0" y1="0" x2="${afterX}" y2="${afterY}"
+            stroke="#007f7b" stroke-width="2.6" stroke-linecap="round" opacity=".74"/>
+          <circle cx="${afterX}" cy="${afterY}" r="5" fill="#007f7b"/>
+        `;
+      }).join("");
+
+      plot.innerHTML = `
+        <circle cx="0" cy="0" r="${radius}" fill="#f5f7f2" stroke="rgba(21,45,56,.15)"/>
+        <circle cx="0" cy="0" r="${radius * 0.5}" fill="none" stroke="rgba(21,45,56,.08)"/>
+        ${background}
+        ${vectors}
+        <circle cx="0" cy="0" r="5" fill="#152d38"/>
+      `;
+    }
+
+    function renderResults() {
+      if (!fittedBase || samples.length < directions.length) return;
+
+      let firmware;
+      try {
+        firmware = currentFirmwareMatrix();
+      } catch (error) {
+        showToast("現在の行列に数値を入力してください");
+        return;
+      }
+
+      const gain = Number(sensitivity.value) / 100;
+      const correction = scaleMatrix(fittedBase, gain);
+      const replacement = multiplyMatrices(correction, firmware);
+      const identity = [[1, 0], [0, 1]];
+      const evaluatedSamples = resultSamples.length ? resultSamples : samples;
+      const before = rmsAngle(identity, evaluatedSamples);
+      const after = rmsAngle(correction, evaluatedSamples);
+      const rotation = closestRotation(fittedBase);
+
+      renderMatrix("correctionMatrix", correction);
+      renderMatrix("replacementMatrix", replacement);
+      plotResults(correction);
+
+      document.getElementById("beforeError").textContent = `${before.toFixed(1)}°`;
+      document.getElementById("afterError").textContent = `${after.toFixed(1)}°`;
+      document.getElementById("rotationValue").textContent = `${rotation >= 0 ? "+" : ""}${rotation.toFixed(1)}°`;
+
+      const confidence = document.getElementById("confidence");
+      const resultSummary = document.getElementById("resultSummary");
+      if (stoppedAtLimit) {
+        confidence.textContent = "CHECK";
+        confidence.style.background = "#c47b22";
+        resultSummary.textContent = "上限まで計測しました";
+      } else if (after <= 4) {
+        confidence.textContent = "HIGH FIT";
+        confidence.style.background = "#007f7b";
+        resultSummary.textContent = "左右・上下が揃いました";
+      } else if (after <= 8) {
+        confidence.textContent = "GOOD FIT";
+        confidence.style.background = "#4f7f3d";
+        resultSummary.textContent = "実用上十分な補正結果です";
+      } else if (after <= 14) {
+        confidence.textContent = "CHECK";
+        confidence.style.background = "#c47b22";
+        resultSummary.textContent = "ばらつきがあります。同じ速さで再計測すると改善します";
+      } else {
+        confidence.textContent = "RETRY";
+        confidence.style.background = "#c84f3d";
+        resultSummary.textContent = "計測のばらつきが大きいため、再計測を推奨します";
+      }
+      if (resultSamples.length && resultSamples.length < samples.length) {
+        resultSummary.textContent += `（${samples.length}回中${resultSamples.length}回を採用）`;
+      }
+
+      const code = buildCode(replacement);
+      document.getElementById("codeOutput").textContent = code;
+      lastReplacement = replacement;
+      applyMatrixButton.disabled = !hidDevice?.opened || resultApplied;
+      copyPayloads = {
+        correction: matrixText(correction),
+        replacement: matrixText(replacement),
+        code
+      };
+      if (stoppedAtLimit) {
+        window.clearTimeout(autoApplyTimer);
+      } else {
+        scheduleAutoApply(replacement);
+      }
+    }
+
+    async function copyText(text) {
+      try {
+        await navigator.clipboard.writeText(text);
+      } catch (error) {
+        const textarea = document.createElement("textarea");
+        textarea.value = text;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.append(textarea);
+        textarea.select();
+        document.execCommand("copy");
+        textarea.remove();
+      }
+      showToast("コピーしました");
+    }
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add("show");
+      window.setTimeout(() => toast.classList.remove("show"), 1500);
+    }
+
+    startButton.addEventListener("click", requestCapture);
+    resetButton.addEventListener("click", () => resetSession(true));
+    resultResetButton.addEventListener("click", () => resetSession(true));
+    connectDeviceButton.addEventListener("click", connectOrDisconnectDevice);
+    readMatrixButton.addEventListener("click", async () => {
+      readMatrixButton.disabled = true;
+      try {
+        await readCalibrationFromDevice();
+      } catch (error) {
+        setDeviceState("error", "RMK 読込失敗", error.message);
+        showToast(error.message);
+      } finally {
+        readMatrixButton.disabled = !hidDevice?.opened;
+      }
+    });
+    applyMatrixButton.addEventListener("click", async () => {
+      applyMatrixButton.disabled = true;
+      try {
+        await writeCalibrationToDevice(lastReplacement || currentFirmwareMatrix());
+      } catch (error) {
+        setDeviceState("error", "RMK 書込失敗", error.message);
+        showToast(error.message);
+      } finally {
+        applyMatrixButton.disabled = !hidDevice?.opened || resultApplied;
+      }
+    });
+    profileCpiProfile.addEventListener("change", renderProfileCpiControl);
+    profileCpiSlider.addEventListener("input", () => {
+      const profile = Number(profileCpiProfile.value);
+      const cpi = Number(profileCpiSlider.value);
+      profileCpiValues[profile] = cpi;
+      profileCpiValue.textContent = `${cpi} CPI`;
+      scheduleProfileCpiSave();
+    });
+    if ("hid" in navigator) {
+      navigator.hid.addEventListener("disconnect", event => {
+        if (event.device !== hidDevice) return;
+        cancelPendingHidRequest("ReeLとの接続が切れました");
+        hidDevice = null;
+        calibrationMacroOffset = null;
+        profileCpiMacroOffset = null;
+        window.clearTimeout(profileCpiSaveTimer);
+        setDeviceState("idle", "RMK 未接続", "ReeLとの接続が切れました。");
+      });
+    }
+    traceToggle.addEventListener("click", () => {
+      showObservedVector = !showObservedVector;
+      traceToggle.classList.toggle("on", showObservedVector);
+      traceToggle.setAttribute("aria-pressed", String(showObservedVector));
+      traceToggle.textContent = `入力矢印 ${showObservedVector ? "ON" : "OFF"}`;
+      setObservedVector(sumX, sumY);
+    });
+    document.addEventListener("mousemove", handleMovement);
+    document.addEventListener("mousemove", handlePreviewMovement);
+    document.addEventListener("mousedown", tryPreviewHit);
+    previewStart.addEventListener("click", requestPreviewCapture);
+    rawModeButton.addEventListener("click", () => setPreviewMode("raw"));
+    correctedModeButton.addEventListener("click", () => setPreviewMode("corrected"));
+    recenterButton.addEventListener("click", recenterPreview);
+    document.addEventListener("pointerlockchange", () => {
+      if (document.pointerLockElement === stage) {
+        if (active) prepareDirection();
+        return;
+      }
+      if (document.pointerLockElement === previewPad) {
+        previewActive = true;
+        previewStart.hidden = true;
+        updatePreviewCursor();
+        return;
+      }
+      if (previewActive) {
+        previewActive = false;
+        previewStart.hidden = false;
+        previewStart.textContent = "操作感プレビューを再開";
+      }
+      if (active) {
+        phase = "paused";
+        clearTimeout(idleTimer);
+        startButton.hidden = false;
+        startButton.textContent = "計測を再開";
+        stage.classList.add("stage-idle");
+        setPrompt("一時停止");
+      }
+    });
+
+    sensitivity.addEventListener("input", () => {
+      sensitivityValue.textContent = `${(Number(sensitivity.value) / 100).toFixed(2)}×`;
+      renderResults();
+    });
+
+    ["f00", "f01", "f10", "f11"].forEach(id => {
+      document.getElementById(id).addEventListener("input", renderResults);
+    });
+
+    document.querySelectorAll("[data-copy]").forEach(button => {
+      button.addEventListener("click", () => {
+        const payload = copyPayloads[button.dataset.copy];
+        if (payload) copyText(payload);
+      });
+    });
+
+    window.addEventListener("keydown", event => {
+      if (document.pointerLockElement === previewPad) {
+        if (event.code === "Space") {
+          event.preventDefault();
+          setPreviewMode(previewMode === "corrected" ? "raw" : "corrected");
+        } else if (event.key.toLowerCase() === "c") {
+          recenterPreview();
+        }
+        return;
+      }
+      if (event.key.toLowerCase() === "r" && active && document.pointerLockElement === stage) {
+        prepareDirection();
+      }
+    });
+
+    window.trackballProfilerTest = {
+      fitCorrection,
+      applyMatrix,
+      multiplyMatrices,
+      angleError,
+      fitReliableCorrection,
+      classifyInliers,
+      matrixDriftDegrees,
+      applyLengthPreservingMatrix,
+      fnv1a,
+      encodeCalibrationBlob,
+      decodeCalibrationBlob,
+      encodeProfileCpiBlob,
+      decodeProfileCpiBlob,
+      defaultFirmwareMatrix: DEFAULT_FIRMWARE_MATRIX,
+      defaultProfileCpi: DEFAULT_PROFILE_CPI,
+      directions
+    };
+
+    profileCpiValues = [...DEFAULT_PROFILE_CPI];
+    renderProfileCpiControl();
+    renderDirectionList();
+    reconnectAuthorizedDevice();
+  </script>
+</body>
+</html>

@@ -1,0 +1,86 @@
+[package]
+name = "reel-rmk"
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+rmk = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172", features = [
+    "nrf52840_ble",
+    "split",
+    "async_matrix",
+    "adafruit_bl",
+    "display",
+] }
+rmk-types = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172" }
+nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
+    "defmt",
+    "peripheral",
+    "central",
+    "nrf52840",
+] }
+nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
+    "defmt",
+    "critical-section-impl",
+    "nrf52840",
+] }
+bt-hci = { version = "0.9", features = ["defmt"] }
+cortex-m = "0.7.7"
+cortex-m-rt = "0.7.5"
+embassy-time = { version = "0.5", features = [
+    "tick-hz-32_768",
+    "defmt",
+    "defmt-timestamp-uptime",
+] }
+embassy-nrf = { version = "0.11", features = [
+    "defmt",
+    "nrf52840",
+    "time-driver-rtc1",
+    "gpiote",
+    "unstable-pac",
+    "nfc-pins-as-gpio",
+    "time",
+] }
+embassy-executor = { version = "0.10", features = [
+    "defmt",
+    "platform-cortex-m",
+    "executor-thread",
+] }
+embassy-embedded-hal = "0.6"
+embassy-sync = "0.8"
+embedded-hal-async = "1"
+embedded-storage-async = "0.4"
+embedded-graphics = "0.8"
+defmt = "1"
+defmt-rtt = "1"
+panic-probe = { version = "1", features = ["print-defmt"] }
+static_cell = "2"
+usbd-hid = "0.10"
+
+[build-dependencies]
+const-gen = "1.6"
+json = "0.12"
+xz2 = "0.1.7"
+
+[[bin]]
+name = "reel_right"
+path = "src/central.rs"
+
+[[bin]]
+name = "reel_left"
+path = "src/peripheral.rs"
+
+[profile.dev]
+codegen-units = 1
+debug = true
+opt-level = 1
+overflow-checks = true
+lto = false
+panic = "unwind"
+
+[profile.release]
+codegen-units = 1
+debug = true
+opt-level = "z"
+overflow-checks = false
+lto = "fat"

@@ -1,0 +1,8 @@
+[rmk]
+ble_profiles_num = 5
+auto_mouse_layer_max_num = 2
+split_central_sleep_timeout_seconds = 300
+
+[event.action]
+pubs = 2
+subs = 2

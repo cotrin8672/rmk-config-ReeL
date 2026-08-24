@@ -1,0 +1,82 @@
+name: Build RMK firmware
+
+on:
+  push:
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/build-rmk.yml"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "memory.x"
+      - "rust-toolchain.toml"
+      - "tools/trackball-profiler.html"
+      - "tools/test-trackball-profiler.js"
+      - "tools/rotary-decoder-tests/**"
+      - "vial.json"
+  pull_request:
+    paths:
+      - ".cargo/**"
+      - ".github/workflows/build-rmk.yml"
+      - "src/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.rs"
+      - "memory.x"
+      - "rust-toolchain.toml"
+      - "tools/trackball-profiler.html"
+      - "tools/test-trackball-profiler.js"
+      - "tools/rotary-decoder-tests/**"
+      - "vial.json"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: thumbv7em-none-eabihf
+          components: llvm-tools
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Check trackball profiler JavaScript
+        run: node tools/test-trackball-profiler.js
+
+      - name: Test rotary decoder waveforms
+        run: >-
+          cargo test
+          --manifest-path tools/rotary-decoder-tests/Cargo.toml
+          --target x86_64-unknown-linux-gnu
+          --locked
+
+      - name: Install firmware conversion tools
+        run: cargo install cargo-binutils cargo-hex-to-uf2 --locked
+
+      - name: Build both halves
+        run: cargo build --release --locked --bins
+
+      - name: Convert right half to UF2
+        run: |
+          cargo objcopy --release --locked --bin reel_right -- -O ihex reel_right.hex
+          cargo hex-to-uf2 --input-path reel_right.hex --output-path reel_right.uf2 --family nrf52840
+
+      - name: Convert left half to UF2
+        run: |
+          cargo objcopy --release --locked --bin reel_left -- -O ihex reel_left.hex
+          cargo hex-to-uf2 --input-path reel_left.hex --output-path reel_left.uf2 --family nrf52840
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reel-rmk-firmware
+          path: |
+            reel_left.uf2
+            reel_right.uf2
+          if-no-files-found: error
