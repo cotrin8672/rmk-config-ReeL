@@ -5,6 +5,7 @@ mod keymap;
 #[macro_use]
 mod macros;
 mod calibration_config;
+mod lcd_dirty_lines;
 mod motion_chunk;
 mod motion_gain;
 mod mouse_layer_priority;

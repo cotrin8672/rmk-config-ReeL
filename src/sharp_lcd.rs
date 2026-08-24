@@ -14,6 +14,8 @@ use rmk::display::{DisplayDriver, DisplayProcessor, DisplayRenderer, RenderConte
 use rmk::types::battery::{BatteryStatus, ChargeState};
 use static_cell::StaticCell;
 
+use crate::lcd_dirty_lines::should_write_line;
+
 const WIDTH: usize = 160;
 const WIDTH_BYTES: usize = WIDTH / 8;
 const HEIGHT: usize = 68;
@@ -71,14 +73,23 @@ impl SharpBus {
         self.end_transaction().await;
     }
 
-    async fn write_frame(&mut self, framebuffer: &[u8; FRAMEBUFFER_SIZE]) {
+    async fn write_frame(
+        &mut self,
+        framebuffer: &[u8; FRAMEBUFFER_SIZE],
+        previous: Option<&[u8; FRAMEBUFFER_SIZE]>,
+    ) {
         self.begin_transaction().await;
 
         let command = [WRITE_COMMAND | self.toggle_vcom()];
         unwrap!(self.spi.write_from_ram(&command).await);
 
         let mut line = [0_u8; WIDTH_BYTES + 2];
+        let previous = previous.map(|framebuffer| framebuffer.as_slice());
         for y in 0..HEIGHT {
+            if !should_write_line(framebuffer, previous, WIDTH_BYTES, y) {
+                continue;
+            }
+
             line[0] = (y + 1) as u8;
             line[1..=WIDTH_BYTES]
                 .copy_from_slice(&framebuffer[y * WIDTH_BYTES..(y + 1) * WIDTH_BYTES]);
@@ -172,7 +183,12 @@ impl DisplayDriver for SharpDisplay {
             return;
         }
 
-        self.bus.lock().await.write_frame(&self.framebuffer).await;
+        let previous = self.flushed_once.then_some(&self.last_framebuffer);
+        self.bus
+            .lock()
+            .await
+            .write_frame(&self.framebuffer, previous)
+            .await;
         self.last_framebuffer.copy_from_slice(&self.framebuffer);
         self.flushed_once = true;
     }

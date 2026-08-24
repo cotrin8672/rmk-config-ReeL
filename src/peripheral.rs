@@ -3,6 +3,7 @@
 
 #[macro_use]
 mod macros;
+mod lcd_dirty_lines;
 mod rotary_decoder;
 mod sharp_lcd;
 mod xiao_battery;
