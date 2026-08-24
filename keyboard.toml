@@ -6,3 +6,6 @@ split_central_sleep_timeout_seconds = 300
 [event.action]
 pubs = 2
 subs = 2
+
+[event.central_connected]
+subs = 2

@@ -3,10 +3,12 @@ use embassy_nrf::gpio::{Level, Output, OutputDrive, Pin};
 use embassy_nrf::interrupt::{self, InterruptExt};
 use embassy_nrf::peripherals::SAADC;
 use embassy_nrf::saadc::{self, AnyInput, Saadc};
-use embassy_time::{Duration, Ticker};
+use embassy_time::Duration;
 use rmk::core_traits::Runnable;
 use rmk::embassy_futures::select::{Either, select};
-use rmk::event::{BatteryStatusEvent, EventSubscriber, SubscribableEvent, publish_event};
+use rmk::event::{
+    BatteryStatusEvent, CentralConnectedEvent, EventSubscriber, SubscribableEvent, publish_event,
+};
 use rmk::input_device::adc::{AnalogEventType, NrfAdc};
 
 pub const DIVIDER_MEASURED: u32 = 510;
@@ -76,14 +78,21 @@ impl PeripheralBatterySnapshot {
 
 impl Runnable for PeripheralBatterySnapshot {
     async fn run(&mut self) -> ! {
-        let mut subscriber = BatteryStatusEvent::subscriber();
-        let mut ticker = Ticker::every(Duration::from_secs(BATTERY_SAMPLE_INTERVAL_SECS));
+        let mut battery_subscriber = BatteryStatusEvent::subscriber();
+        let mut connection_subscriber = CentralConnectedEvent::subscriber();
 
         loop {
-            match select(subscriber.next_event(), ticker.next()).await {
+            match select(
+                battery_subscriber.next_event(),
+                connection_subscriber.next_event(),
+            )
+            .await
+            {
                 Either::First(status) => self.status = Some(status),
-                Either::Second(_) => {
-                    if let Some(status) = self.status {
+                Either::Second(connection) => {
+                    if connection.connected
+                        && let Some(status) = self.status
+                    {
                         publish_event(status);
                     }
                 }
