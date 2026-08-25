@@ -5,7 +5,7 @@ use rmk::{a, encoder, k, ltp, mt, mtp, shifted, td, user, wm};
 
 pub const ROW: usize = 4;
 pub const COL: usize = 11;
-pub const NUM_LAYER: usize = 4;
+pub const NUM_LAYER: usize = 5;
 pub const NUM_ENCODER: usize = 1;
 
 const CTRL_SHIFT: ModifierCombination = ModifierCombination::new()
@@ -47,6 +47,12 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent)],
             [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No)],
         ],
+        [
+            [k!(T), k!(R), k!(E), k!(W), k!(Q), a!(No), k!(P), k!(O), k!(I), k!(U), k!(Y)],
+            [k!(G), k!(F), k!(D), k!(S), k!(A), mt!(Escape, ModifierCombination::LCTRL), mt!(Semicolon, CTRL_SHIFT), k!(L), k!(K), k!(J), k!(H)],
+            [k!(B), k!(V), k!(C), k!(X), k!(Z), k!(LGui), k!(Slash), k!(Dot), k!(Comma), k!(M), k!(N)],
+            [k!(MouseBtn4), k!(MouseBtn5), mtp!(Language2, ModifierCombination::LSHIFT, HOLD_PREFERRED_PROFILE), ltp!(1, Space, BALANCED_LAYER_TAP_PROFILE), mt!(Language1, ModifierCombination::LALT), a!(No), k!(Minus), k!(Tab), ltp!(2, Enter, BALANCED_LAYER_TAP_PROFILE), td!(0), a!(No)],
+        ],
     ]
 }
 
@@ -56,5 +62,6 @@ pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAY
         [encoder!(k!(MouseWheelUp), k!(MouseWheelDown))],
         [encoder!(a!(Transparent), a!(Transparent))],
         [encoder!(a!(Transparent), a!(Transparent))],
+        [encoder!(k!(MouseWheelUp), k!(MouseWheelDown))],
     ]
 }
