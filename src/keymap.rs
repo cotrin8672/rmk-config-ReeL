@@ -48,10 +48,10 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No)],
         ],
         [
-            [k!(T), k!(R), k!(E), k!(W), k!(Q), a!(No), k!(P), k!(O), k!(I), k!(U), k!(Y)],
-            [k!(G), k!(F), k!(D), k!(S), k!(A), mt!(Escape, ModifierCombination::LCTRL), mt!(Semicolon, CTRL_SHIFT), k!(L), k!(K), k!(J), k!(H)],
-            [k!(B), k!(V), k!(C), k!(X), k!(Z), k!(LGui), k!(Slash), k!(Dot), k!(Comma), k!(M), k!(N)],
-            [k!(MouseBtn4), k!(MouseBtn5), mtp!(Language2, ModifierCombination::LSHIFT, HOLD_PREFERRED_PROFILE), ltp!(1, Space, BALANCED_LAYER_TAP_PROFILE), mt!(Language1, ModifierCombination::LALT), a!(No), k!(Minus), k!(Tab), ltp!(2, Enter, BALANCED_LAYER_TAP_PROFILE), td!(0), a!(No)],
+            [k!(Kc5), k!(Kc4), k!(Kc3), k!(Kc2), k!(Kc1), a!(No), k!(Kc0), k!(Kc9), k!(Kc8), k!(Kc7), k!(Kc6)],
+            [shifted!(Comma), shifted!(Kc9), shifted!(LeftBracket), k!(LeftBracket), shifted!(Quote), a!(Transparent), k!(Quote), k!(RightBracket), shifted!(RightBracket), shifted!(Kc0), shifted!(Dot)],
+            [shifted!(Kc5), k!(Slash), shifted!(Kc8), k!(Minus), shifted!(Equal), a!(Transparent), shifted!(Kc6), a!(Transparent), a!(Transparent), k!(Equal), shifted!(Semicolon)],
+            [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No)],
         ],
     ]
 }
