@@ -145,12 +145,14 @@ impl Runnable for LeftRotaryEncoder {
 
             loop {
                 let levels = (self.pin_a.is_high(), self.pin_b.is_high());
-                if let Some(detent) = self.decoder.update(levels.0, levels.1) {
-                    let direction = match detent {
+                if let Some(batch) = self.decoder.update(levels.0, levels.1) {
+                    let direction = match batch.detent {
                         Detent::Clockwise => Direction::Clockwise,
                         Detent::CounterClockwise => Direction::CounterClockwise,
                     };
-                    ENCODER_DIRECTION_CHANNEL.send(direction).await;
+                    for _ in 0..batch.count {
+                        ENCODER_DIRECTION_CHANNEL.send(direction).await;
+                    }
                 }
 
                 if self.decoder.is_idle() {
