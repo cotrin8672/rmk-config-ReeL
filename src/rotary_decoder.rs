@@ -30,8 +30,9 @@
 //! No instantaneous B read or fixed B-sampling delay is involved.
 //!
 //! A sampled two-bit transition contains no direction information and adds
-//! zero. Such a click remains pending until a later valid Gray transition
-//! supplies its direction; the decoder never substitutes the old direction.
+//! zero. If an entire click is such a transition (not observed in the
+//! four-click signed-position measurement), the previous direction is the
+//! only physically defensible fallback.
 
 /// One physical detent click.
 ///
@@ -43,13 +44,6 @@
 pub enum Detent {
     Clockwise,
     CounterClockwise,
-}
-
-/// One or more consecutive clicks whose direction was resolved together.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DetentBatch {
-    pub detent: Detent,
-    pub count: u8,
 }
 
 /// Consecutive identical A samples required before a click is accepted.
@@ -83,7 +77,7 @@ pub struct ClockedDetentDecoder {
     tracking_a_edge: bool,
     edge_movement: i32,
     interval_movement: i32,
-    pending_clicks: u8,
+    last_direction: Option<Detent>,
 }
 
 impl ClockedDetentDecoder {
@@ -97,7 +91,7 @@ impl ClockedDetentDecoder {
             tracking_a_edge: false,
             edge_movement: 0,
             interval_movement: 0,
-            pending_clicks: 0,
+            last_direction: None,
         }
     }
 
@@ -109,7 +103,7 @@ impl ClockedDetentDecoder {
     /// Feed one raw sample. A debounced A transition emits one detent; its
     /// direction comes from signed Gray movement accumulated across the
     /// whole click interval rather than B at any selected instant.
-    pub fn update(&mut self, a_high: bool, b_high: bool) -> Option<DetentBatch> {
+    pub fn update(&mut self, a_high: bool, b_high: bool) -> Option<Detent> {
         let state = encode(a_high, b_high);
         if state == self.previous_state {
             self.unchanged_samples = self.unchanged_samples.saturating_add(1);
@@ -139,7 +133,6 @@ impl ClockedDetentDecoder {
 
         if self.run_a >= DEBOUNCE_SAMPLES && self.candidate_a != self.stable_a {
             self.stable_a = self.candidate_a;
-            self.pending_clicks = self.pending_clicks.saturating_add(1);
             let movement = if self.edge_movement != 0 {
                 self.edge_movement
             } else {
@@ -150,20 +143,15 @@ impl ClockedDetentDecoder {
             } else if movement < 0 {
                 Some(Detent::CounterClockwise)
             } else {
-                None
+                self.last_direction
             };
             self.tracking_a_edge = false;
             self.edge_movement = 0;
+            self.interval_movement = 0;
             if let Some(direction) = direction {
-                let count = self.pending_clicks;
-                self.pending_clicks = 0;
-                self.interval_movement = 0;
-                return Some(DetentBatch {
-                    detent: direction,
-                    count,
-                });
+                self.last_direction = Some(direction);
             }
-            return None;
+            return direction;
         }
 
         // A glitch returned to its accepted level instead of becoming a
@@ -176,24 +164,10 @@ impl ClockedDetentDecoder {
             self.edge_movement = 0;
         }
 
-        // A directionless A click can be followed by the usable B transition
-        // from that same physical click. Resolve only after the contacts have
-        // settled so bounce pairs have first had a chance to cancel.
+        // A completed click can leave a trailing B transition in the next
+        // interval. Once the contacts settle, that evidence belongs to the
+        // old click and must not survive into a later reversal.
         if self.unchanged_samples >= EVIDENCE_IDLE_SAMPLES {
-            if self.pending_clicks > 0 && self.interval_movement != 0 {
-                let detent = if self.interval_movement > 0 {
-                    Detent::Clockwise
-                } else {
-                    Detent::CounterClockwise
-                };
-                let count = self.pending_clicks;
-                self.pending_clicks = 0;
-                self.interval_movement = 0;
-                return Some(DetentBatch { detent, count });
-            }
-
-            // With no unresolved click, settled movement is only residue from
-            // the preceding click and must not bias a later reversal.
             self.interval_movement = 0;
         }
         None
@@ -202,7 +176,7 @@ impl ClockedDetentDecoder {
 
 #[cfg(test)]
 mod tests {
-    use super::{ClockedDetentDecoder, DEBOUNCE_SAMPLES, Detent, DetentBatch};
+    use super::{ClockedDetentDecoder, DEBOUNCE_SAMPLES, Detent};
 
     const STABLE: usize = DEBOUNCE_SAMPLES as usize;
 
@@ -225,14 +199,8 @@ mod tests {
         fn hold(&mut self, (a, b): (bool, bool), count: usize) {
             for _ in 0..count {
                 match self.decoder.update(a, b) {
-                    Some(DetentBatch {
-                        detent: Detent::Clockwise,
-                        count,
-                    }) => self.clockwise += u32::from(count),
-                    Some(DetentBatch {
-                        detent: Detent::CounterClockwise,
-                        count,
-                    }) => self.counterclockwise += u32::from(count),
+                    Some(Detent::Clockwise) => self.clockwise += 1,
+                    Some(Detent::CounterClockwise) => self.counterclockwise += 1,
                     None => {}
                 }
             }
@@ -339,45 +307,6 @@ mod tests {
         let mut harness = Harness::new(true, true);
         harness.hold(S00, STABLE + 200);
         harness.assert_events(0, 0);
-    }
-
-    #[test]
-    fn ambiguous_reversal_waits_for_new_direction_instead_of_reusing_old_one() {
-        let mut harness = Harness::new(true, true);
-
-        cw_click_from_11(&mut harness);
-        harness.assert_events(1, 0);
-
-        // The first reverse click is sampled as a directionless two-bit
-        // transition. It must not repeat the preceding CW direction.
-        harness.hold(S11, STABLE + 20);
-        harness.assert_events(0, 0);
-
-        // The next valid CCW click resolves both the held click and itself.
-        ccw_click_from_11(&mut harness);
-        harness.assert_events(0, 2);
-    }
-
-    #[test]
-    fn settled_trailing_transition_resolves_a_pending_click() {
-        let mut harness = Harness::new(true, true);
-
-        harness.hold(S00, STABLE + 20);
-        harness.assert_events(0, 0);
-        harness.hold(S01, STABLE + 20);
-        harness.assert_events(0, 1);
-    }
-
-    #[test]
-    fn consecutive_ambiguous_clicks_are_all_retained_until_direction_resolves() {
-        let mut harness = Harness::new(true, true);
-
-        harness.hold(S00, STABLE + 20);
-        harness.hold(S11, STABLE + 20);
-        harness.assert_events(0, 0);
-
-        ccw_click_from_11(&mut harness);
-        harness.assert_events(0, 3);
     }
 
     #[test]
