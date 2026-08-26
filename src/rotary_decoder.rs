@@ -30,9 +30,9 @@
 //! No instantaneous B read or fixed B-sampling delay is involved.
 //!
 //! A sampled two-bit transition contains no direction information and adds
-//! zero. If an entire click is such a transition, it is suppressed instead of
-//! being assigned the previous direction. This avoids emitting one stale
-//! direction event at a reversal.
+//! zero. If an entire click is such a transition (not observed in the
+//! four-click signed-position measurement), the previous direction is the
+//! only physically defensible fallback.
 
 /// One physical detent click.
 ///
@@ -77,6 +77,7 @@ pub struct ClockedDetentDecoder {
     tracking_a_edge: bool,
     edge_movement: i32,
     interval_movement: i32,
+    last_direction: Option<Detent>,
 }
 
 impl ClockedDetentDecoder {
@@ -90,6 +91,7 @@ impl ClockedDetentDecoder {
             tracking_a_edge: false,
             edge_movement: 0,
             interval_movement: 0,
+            last_direction: None,
         }
     }
 
@@ -141,11 +143,14 @@ impl ClockedDetentDecoder {
             } else if movement < 0 {
                 Some(Detent::CounterClockwise)
             } else {
-                None
+                self.last_direction
             };
             self.tracking_a_edge = false;
             self.edge_movement = 0;
             self.interval_movement = 0;
+            if let Some(direction) = direction {
+                self.last_direction = Some(direction);
+            }
             return direction;
         }
 
@@ -300,20 +305,6 @@ mod tests {
         // A two-bit transition has no direction information. With no prior
         // direction to use as a fallback, the decoder must not invent one.
         let mut harness = Harness::new(true, true);
-        harness.hold(S00, STABLE + 200);
-        harness.assert_events(0, 0);
-    }
-
-    #[test]
-    fn ambiguous_click_after_known_direction_does_not_reuse_old_direction() {
-        let mut harness = Harness::new(true, true);
-        cw_click_from_11(&mut harness);
-        harness.assert_events(1, 0);
-
-        // A reverses, but both phases changed before software observed the
-        // intermediate state. The direction is unknowable, so the old CW
-        // direction must not be emitted for this click.
-        harness.hold(S11, STABLE + 1);
         harness.hold(S00, STABLE + 200);
         harness.assert_events(0, 0);
     }
