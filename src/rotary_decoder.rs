@@ -30,9 +30,8 @@
 //! No instantaneous B read or fixed B-sampling delay is involved.
 //!
 //! A sampled two-bit transition contains no direction information and adds
-//! zero. If an entire click is such a transition (not observed in the
-//! four-click signed-position measurement), the previous direction is the
-//! only physically defensible fallback.
+//! zero. It must not inherit the previous direction, especially across a
+//! reversal.
 
 /// One physical detent click.
 ///
@@ -47,11 +46,12 @@ pub enum Detent {
 }
 
 /// Consecutive identical A samples required before a click is accepted.
-/// At the ~61 us sample period this is about 1 ms.
-pub const DEBOUNCE_SAMPLES: u8 = 16;
+/// At the ~61 us sample period this is about 3.05 ms, covering the encoder's
+/// specified maximum 3 ms chattering interval.
+pub const DEBOUNCE_SAMPLES: u8 = 50;
 
 /// Unchanged samples before direction evidence is considered old. This is
-/// about 1 ms at the ~61 us sample period. A confirms at the same duration,
+/// about 3.05 ms at the ~61 us sample period. A confirms at the same duration,
 /// so a real A edge is consumed before its evidence can expire.
 const EVIDENCE_IDLE_SAMPLES: u8 = DEBOUNCE_SAMPLES;
 
@@ -77,7 +77,6 @@ pub struct ClockedDetentDecoder {
     tracking_a_edge: bool,
     edge_movement: i32,
     interval_movement: i32,
-    last_direction: Option<Detent>,
 }
 
 impl ClockedDetentDecoder {
@@ -91,7 +90,6 @@ impl ClockedDetentDecoder {
             tracking_a_edge: false,
             edge_movement: 0,
             interval_movement: 0,
-            last_direction: None,
         }
     }
 
@@ -143,14 +141,11 @@ impl ClockedDetentDecoder {
             } else if movement < 0 {
                 Some(Detent::CounterClockwise)
             } else {
-                self.last_direction
+                None
             };
             self.tracking_a_edge = false;
             self.edge_movement = 0;
             self.interval_movement = 0;
-            if let Some(direction) = direction {
-                self.last_direction = Some(direction);
-            }
             return direction;
         }
 
@@ -307,6 +302,37 @@ mod tests {
         let mut harness = Harness::new(true, true);
         harness.hold(S00, STABLE + 200);
         harness.assert_events(0, 0);
+    }
+
+    #[test]
+    fn ambiguous_double_does_not_inherit_a_previous_direction() {
+        let mut harness = Harness::new(true, true);
+        cw_click_from_11(&mut harness);
+        harness.assert_events(1, 0);
+
+        // The sampled 00 -> 11 transition changes both phases and therefore
+        // carries no direction, even though a previous CW click exists.
+        harness.hold(S11, STABLE + 1);
+        harness.assert_events(0, 0);
+
+        // No click was retained or batched; the next ordinary click remains
+        // a single independent event.
+        cw_click_from_11(&mut harness);
+        harness.assert_events(1, 0);
+    }
+
+    #[test]
+    fn a_chatter_shorter_than_the_specified_window_does_not_emit_early() {
+        let mut harness = Harness::new(true, true);
+
+        harness.hold(S01, STABLE - 1);
+        harness.assert_events(0, 0);
+        harness.hold(S11, 1);
+        harness.hold(S01, STABLE - 1);
+        harness.assert_events(0, 0);
+
+        harness.hold(S01, 1);
+        harness.assert_events(1, 0);
     }
 
     #[test]
