@@ -133,17 +133,28 @@ impl ClockedDetentDecoder {
 
         if self.run_a >= DEBOUNCE_SAMPLES && self.candidate_a != self.stable_a {
             self.stable_a = self.candidate_a;
-            let movement = if self.edge_movement != 0 {
-                self.edge_movement
-            } else {
-                self.interval_movement
-            };
-            let direction = if movement > 0 {
+            let edge_direction = if self.edge_movement > 0 {
                 Some(Detent::Clockwise)
-            } else if movement < 0 {
+            } else if self.edge_movement < 0 {
                 Some(Detent::CounterClockwise)
             } else {
-                self.last_direction
+                None
+            };
+            let interval_direction = if self.interval_movement > 0 {
+                Some(Detent::Clockwise)
+            } else if self.interval_movement < 0 {
+                Some(Detent::CounterClockwise)
+            } else {
+                None
+            };
+            let direction = if let Some(direction) = edge_direction {
+                Some(direction)
+            } else {
+                match (interval_direction, self.last_direction) {
+                    (Some(direction), None) => Some(direction),
+                    (Some(direction), Some(last)) if direction != last => Some(direction),
+                    _ => None,
+                }
             };
             self.tracking_a_edge = false;
             self.edge_movement = 0;
@@ -306,6 +317,26 @@ mod tests {
         // direction to use as a fallback, the decoder must not invent one.
         let mut harness = Harness::new(true, true);
         harness.hold(S00, STABLE + 200);
+        harness.assert_events(0, 0);
+    }
+
+    #[test]
+    fn ambiguous_edge_accepts_opposite_interval_evidence_on_reversal() {
+        let mut harness = Harness::new(true, true);
+        harness.decoder.last_direction = Some(Detent::Clockwise);
+        harness.decoder.interval_movement = -3;
+
+        harness.hold(S00, STABLE);
+        harness.assert_events(0, 1);
+    }
+
+    #[test]
+    fn ambiguous_edge_rejects_same_direction_interval_residue() {
+        let mut harness = Harness::new(true, true);
+        harness.decoder.last_direction = Some(Detent::Clockwise);
+        harness.decoder.interval_movement = 3;
+
+        harness.hold(S00, STABLE);
         harness.assert_events(0, 0);
     }
 
