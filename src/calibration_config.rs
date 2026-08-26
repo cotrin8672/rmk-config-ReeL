@@ -3,6 +3,8 @@ use core::sync::atomic::{AtomicI32, AtomicU32, Ordering};
 use embassy_time::Timer;
 use embedded_storage_async::nor_flash::NorFlash;
 use rmk::core_traits::Runnable;
+use rmk::embassy_futures::select::{Either, select};
+use rmk::event::{EventSubscriber, SleepStateEvent, SubscribableEvent};
 use rmk::host::KeyboardContext;
 use rmk_types::constants::MACRO_SPACE_SIZE;
 
@@ -290,9 +292,22 @@ impl<'a, 'keymap, F: NorFlash> CalibrationConfigWatcher<'a, 'keymap, F> {
 
 impl<F: NorFlash> Runnable for CalibrationConfigWatcher<'_, '_, F> {
     async fn run(&mut self) -> ! {
+        let mut sleep_subscriber = SleepStateEvent::subscriber();
+
         loop {
-            self.refresh().await;
-            Timer::after_secs(CONFIG_REFRESH_INTERVAL_SECS).await;
+            match select(
+                sleep_subscriber.next_event(),
+                Timer::after_secs(CONFIG_REFRESH_INTERVAL_SECS),
+            )
+            .await
+            {
+                Either::First(sleep) if sleep.0 => {
+                    while sleep_subscriber.next_event().await.0 {}
+                    self.refresh().await;
+                }
+                Either::First(_) => {}
+                Either::Second(_) => self.refresh().await,
+            }
         }
     }
 }

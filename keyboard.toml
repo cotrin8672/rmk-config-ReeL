@@ -9,3 +9,9 @@ subs = 2
 
 [event.central_connected]
 subs = 2
+
+[event.sleep_state]
+# Three ReeL-local power-aware tasks subscribe on the central: calibration,
+# profile CPI, and battery monitoring. Feature-based RMK subscribers are added
+# on top of this base count during the build.
+subs = 4

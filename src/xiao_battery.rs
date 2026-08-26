@@ -3,14 +3,13 @@ use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pin};
 use embassy_nrf::interrupt::{self, InterruptExt};
 use embassy_nrf::peripherals::SAADC;
 use embassy_nrf::saadc::{self, AnyInput, Saadc};
-use embassy_time::{Duration, Timer};
+use embassy_time::Timer;
 use rmk::core_traits::Runnable;
 use rmk::embassy_futures::select::{Either, select};
 use rmk::event::{
-    BatteryStatusEvent, CentralConnectedEvent, ChargingStateEvent, EventSubscriber,
-    SubscribableEvent, publish_event,
+    BatteryAdcEvent, BatteryStatusEvent, CentralConnectedEvent, ChargingStateEvent,
+    EventSubscriber, SleepStateEvent, SubscribableEvent, publish_event,
 };
-use rmk::input_device::adc::{AnalogEventType, NrfAdc};
 
 pub const DIVIDER_MEASURED: u32 = 510;
 pub const DIVIDER_TOTAL: u32 = 1510;
@@ -20,7 +19,8 @@ const CHARGING_DEBOUNCE_MS: u64 = 20;
 
 /// Battery monitor for the XIAO nRF52840 onboard divider.
 pub struct XiaoBatteryMonitor {
-    adc: NrfAdc<'static, 1, 1>,
+    saadc: Saadc<'static, 1>,
+    sample: [i16; 1],
     // The XIAO schematic requires P0.14 to remain a low-side sink while reading.
     _read_enable: Output<'static>,
 }
@@ -46,23 +46,38 @@ impl XiaoBatteryMonitor {
         saadc.calibrate().await;
 
         Self {
-            adc: NrfAdc::new(
-                saadc,
-                [AnalogEventType::Battery],
-                [0],
-                // Battery status does not need sub-minute updates. Fewer
-                // SAADC wakeups reduce idle power without changing BLE timing.
-                Duration::from_secs(BATTERY_SAMPLE_INTERVAL_SECS),
-                None,
-            ),
+            saadc,
+            sample: [0],
             _read_enable: read_enable,
         }
+    }
+
+    async fn sample_and_publish(&mut self) {
+        self.saadc.sample(&mut self.sample).await;
+        publish_event(BatteryAdcEvent(self.sample[0] as u16));
     }
 }
 
 impl Runnable for XiaoBatteryMonitor {
     async fn run(&mut self) -> ! {
-        self.adc.run().await
+        let mut sleep_subscriber = SleepStateEvent::subscriber();
+        self.sample_and_publish().await;
+
+        loop {
+            match select(
+                sleep_subscriber.next_event(),
+                Timer::after_secs(BATTERY_SAMPLE_INTERVAL_SECS),
+            )
+            .await
+            {
+                Either::First(sleep) if sleep.0 => {
+                    while sleep_subscriber.next_event().await.0 {}
+                    self.sample_and_publish().await;
+                }
+                Either::First(_) => {}
+                Either::Second(_) => self.sample_and_publish().await,
+            }
+        }
     }
 }
 

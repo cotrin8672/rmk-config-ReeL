@@ -1,10 +1,10 @@
 use embassy_time::{Duration, Timer};
 use embedded_storage_async::nor_flash::NorFlash;
 use rmk::core_traits::Runnable;
-use rmk::embassy_futures::select::{Either, select};
+use rmk::embassy_futures::select::{Either3, select3};
 use rmk::event::{
-    ConnectionStatusChangeEvent, EventSubscriber, PointingSetCpiEvent, SubscribableEvent,
-    publish_event_async,
+    ConnectionStatusChangeEvent, EventSubscriber, PointingSetCpiEvent, SleepStateEvent,
+    SubscribableEvent, publish_event_async,
 };
 use rmk::host::KeyboardContext;
 use rmk_types::constants::MACRO_SPACE_SIZE;
@@ -236,7 +236,8 @@ impl<'a, 'keymap, F: NorFlash> ProfileCpiConfigWatcher<'a, 'keymap, F> {
 
 impl<F: NorFlash> Runnable for ProfileCpiConfigWatcher<'_, '_, F> {
     async fn run(&mut self) -> ! {
-        let mut subscriber = ConnectionStatusChangeEvent::subscriber();
+        let mut connection_subscriber = ConnectionStatusChangeEvent::subscriber();
+        let mut sleep_subscriber = SleepStateEvent::subscriber();
         Timer::after(INITIAL_APPLY_DELAY).await;
         self.active_profile = self
             .context
@@ -247,14 +248,27 @@ impl<F: NorFlash> Runnable for ProfileCpiConfigWatcher<'_, '_, F> {
         self.apply_active_profile().await;
 
         loop {
-            match select(
+            match select3(
+                sleep_subscriber.next_event(),
+                connection_subscriber.next_event(),
                 Timer::after(CONFIG_REFRESH_INTERVAL),
-                subscriber.next_event(),
             )
             .await
             {
-                Either::First(_) => self.refresh().await,
-                Either::Second(event) => self.handle_connection_change(event).await,
+                Either3::First(sleep) if sleep.0 => {
+                    while sleep_subscriber.next_event().await.0 {}
+                    self.active_profile = self
+                        .context
+                        .connection_status()
+                        .ble
+                        .profile
+                        .min((PROFILE_COUNT - 1) as u8);
+                    self.refresh().await;
+                    self.apply_active_profile().await;
+                }
+                Either3::First(_) => {}
+                Either3::Second(event) => self.handle_connection_change(event).await,
+                Either3::Third(_) => self.refresh().await,
             }
         }
     }

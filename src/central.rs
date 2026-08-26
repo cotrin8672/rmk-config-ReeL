@@ -96,6 +96,7 @@ async fn mpsl_task(mpsl: &'static MultiprotocolServiceLayer<'static>) -> ! {
 const L2CAP_TXQ: u8 = 3;
 const L2CAP_RXQ: u8 = 3;
 const L2CAP_MTU: usize = 251;
+const BLE_DEFAULT_TX_POWER_DBM: i8 = 0;
 const TRACKBALL_DEVICE_ID: u8 = 0;
 const TRACKBALL_REPORT_HZ: u16 = 125;
 const AML_TRIGGER_DEVICE_ID: u8 = 1;
@@ -111,6 +112,7 @@ fn build_sdc<'d, const N: usize>(
     memory: &'d mut sdc::Mem<N>,
 ) -> Result<nrf_sdc::SoftdeviceController<'d>, nrf_sdc::Error> {
     sdc::Builder::new()?
+        .default_tx_power(BLE_DEFAULT_TX_POWER_DBM)?
         .support_scan()
         .support_central()
         .support_adv()
