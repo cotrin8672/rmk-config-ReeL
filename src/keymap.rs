@@ -5,7 +5,7 @@ use rmk::{a, encoder, k, ltp, mt, mtp, shifted, td, user, wm};
 
 pub const ROW: usize = 4;
 pub const COL: usize = 11;
-pub const NUM_LAYER: usize = 5;
+pub const NUM_LAYER: usize = 4;
 pub const NUM_ENCODER: usize = 1;
 
 const CTRL_SHIFT: ModifierCombination = ModifierCombination::new()
@@ -47,12 +47,6 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent)],
             [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No)],
         ],
-        [
-            [k!(Kc5), k!(Kc4), k!(Kc3), k!(Kc2), k!(Kc1), a!(No), k!(Kc0), k!(Kc9), k!(Kc8), k!(Kc7), k!(Kc6)],
-            [shifted!(Comma), shifted!(Kc9), shifted!(LeftBracket), k!(LeftBracket), shifted!(Quote), a!(Transparent), k!(Quote), k!(RightBracket), shifted!(RightBracket), shifted!(Kc0), shifted!(Dot)],
-            [shifted!(Kc5), k!(Slash), shifted!(Kc8), k!(Minus), shifted!(Equal), a!(Transparent), shifted!(Kc6), a!(Transparent), a!(Transparent), k!(Equal), shifted!(Semicolon)],
-            [a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No), a!(Transparent), a!(Transparent), a!(Transparent), a!(Transparent), a!(No)],
-        ],
     ]
 }
 
@@ -62,6 +56,5 @@ pub const fn get_default_encoder_map() -> [[EncoderAction; NUM_ENCODER]; NUM_LAY
         [encoder!(k!(MouseWheelUp), k!(MouseWheelDown))],
         [encoder!(a!(Transparent), a!(Transparent))],
         [encoder!(a!(Transparent), a!(Transparent))],
-        [encoder!(k!(MouseWheelUp), k!(MouseWheelDown))],
     ]
 }
