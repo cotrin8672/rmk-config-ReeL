@@ -100,33 +100,15 @@ struct LeftRotaryEncoder {
     pin_a: Input<'static>,
     pin_b: Input<'static>,
     decoder: ClockedDetentDecoder,
-    last_a: bool,
-    last_b: bool,
 }
 
 impl LeftRotaryEncoder {
     fn new(pin_a: Input<'static>, pin_b: Input<'static>) -> Self {
-        let last_a = pin_a.is_high();
-        let last_b = pin_b.is_high();
-        let decoder = ClockedDetentDecoder::new(last_a, last_b);
+        let decoder = ClockedDetentDecoder::new(pin_a.is_high(), pin_b.is_high());
         Self {
             pin_a,
             pin_b,
             decoder,
-            last_a,
-            last_b,
-        }
-    }
-
-    async fn feed_sample(&mut self, a_high: bool, b_high: bool) {
-        self.last_a = a_high;
-        self.last_b = b_high;
-        if let Some(detent) = self.decoder.update(a_high, b_high) {
-            let direction = match detent {
-                Detent::Clockwise => Direction::Clockwise,
-                Detent::CounterClockwise => Direction::CounterClockwise,
-            };
-            ENCODER_DIRECTION_CHANNEL.send(direction).await;
         }
     }
 }
@@ -149,37 +131,32 @@ async fn encoder_event_task() -> ! {
 
 impl Runnable for LeftRotaryEncoder {
     async fn run(&mut self) -> ! {
-        use rmk::embassy_futures::select::{Either, select};
+        use rmk::embassy_futures::select::select;
 
         // Two 32.768 kHz timer ticks (~61 us).
         const SAMPLE_PERIOD_TICKS: u64 = 2;
 
         loop {
-            let edge = select(
+            select(
                 self.pin_a.wait_for_any_edge(),
                 self.pin_b.wait_for_any_edge(),
             )
             .await;
 
-            // Preserve the phase that woke the task. If both contacts have
-            // changed by the time the GPIO levels are read, feeding this
-            // intermediate one-bit state keeps their order visible to the
-            // existing Gray-code decoder instead of collapsing it into an
-            // ambiguous two-bit transition.
-            let levels = (self.pin_a.is_high(), self.pin_b.is_high());
-            let ordered_edge = match edge {
-                Either::First(()) => (levels.0, self.last_b),
-                Either::Second(()) => (self.last_a, levels.1),
-            };
-            self.feed_sample(ordered_edge.0, ordered_edge.1).await;
-            if ordered_edge != levels {
-                self.feed_sample(levels.0, levels.1).await;
-            }
-
-            while !self.decoder.is_idle() {
-                Timer::after_ticks(SAMPLE_PERIOD_TICKS).await;
+            loop {
                 let levels = (self.pin_a.is_high(), self.pin_b.is_high());
-                self.feed_sample(levels.0, levels.1).await;
+                if let Some(detent) = self.decoder.update(levels.0, levels.1) {
+                    let direction = match detent {
+                        Detent::Clockwise => Direction::Clockwise,
+                        Detent::CounterClockwise => Direction::CounterClockwise,
+                    };
+                    ENCODER_DIRECTION_CHANNEL.send(direction).await;
+                }
+
+                if self.decoder.is_idle() {
+                    break;
+                }
+                Timer::after_ticks(SAMPLE_PERIOD_TICKS).await;
             }
         }
     }
