@@ -6,6 +6,7 @@ use rmk::event::{Axis, AxisEvent, AxisValType, PointingEvent, PointingSetCpiEven
 use rmk::input_device::pointing::{InitState, PointingDriver};
 use rmk::macros::{input_device, processor};
 
+use crate::adaptive_heading_filter::AdaptiveHeadingFilter;
 use crate::calibration_config::current_matrix;
 use crate::motion_chunk::take_proportional_i8_chunk;
 use crate::motion_gain::MotionGain;
@@ -25,14 +26,17 @@ pub struct TransformingPointingDevice<S: PointingDriver> {
     accumulated_y: i32,
     pending_report_x: i32,
     pending_report_y: i32,
+    last_heading_motion: Option<Instant>,
     requested_cpi: Option<u16>,
     transform: TrackballTransform,
+    heading_filter: AdaptiveHeadingFilter,
     gain: MotionGain,
 }
 
 impl<S: PointingDriver> TransformingPointingDevice<S> {
     const MAX_INIT_RETRIES: u8 = 3;
     const DEFAULT_POLL_INTERVAL_US: u64 = 500;
+    const HEADING_RESET_GAP: Duration = Duration::from_millis(40);
 
     pub fn with_report_hz(id: u8, sensor: S, report_hz: u16) -> Self {
         let report_interval = Duration::from_hz(report_hz as u64);
@@ -50,8 +54,10 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             accumulated_y: 0,
             pending_report_x: 0,
             pending_report_y: 0,
+            last_heading_motion: None,
             requested_cpi: None,
             transform: TrackballTransform::new(),
+            heading_filter: AdaptiveHeadingFilter::new(),
             gain: MotionGain::new(),
         }
     }
@@ -98,7 +104,18 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             return;
         }
 
-        if let Ok(motion) = self.sensor.read_motion().await {
+        if let Ok(motion) = self.sensor.read_motion().await
+            && (motion.dx != 0 || motion.dy != 0)
+        {
+            let now = Instant::now();
+            if self
+                .last_heading_motion
+                .map(|last| now.duration_since(last) > Self::HEADING_RESET_GAP)
+                .unwrap_or(false)
+            {
+                self.heading_filter.reset_heading();
+            }
+            self.last_heading_motion = Some(now);
             self.accumulated_x = self.accumulated_x.saturating_add(i32::from(motion.dx));
             self.accumulated_y = self.accumulated_y.saturating_add(i32::from(motion.dy));
         }
@@ -125,6 +142,7 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
         let raw_y = take_i16_chunk(&mut self.accumulated_y);
 
         let (x, y) = self.transform.apply(raw_x, raw_y, current_matrix());
+        let (x, y) = self.heading_filter.apply(x, y);
         let (x, y) = self.gain.apply(x, y);
         self.pending_report_x = self.pending_report_x.saturating_add(i32::from(x));
         self.pending_report_y = self.pending_report_y.saturating_add(i32::from(y));
