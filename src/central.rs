@@ -1,6 +1,8 @@
 #![no_main]
 #![no_std]
 
+#[allow(dead_code)]
+mod adaptive_heading_filter;
 mod keymap;
 #[macro_use]
 mod macros;

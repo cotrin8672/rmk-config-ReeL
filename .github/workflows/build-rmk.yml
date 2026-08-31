@@ -57,6 +57,9 @@ jobs:
           --target x86_64-unknown-linux-gnu
           --locked
 
+      - name: Test adaptive heading filter
+        run: rustc --test src/adaptive_heading_filter.rs -o adaptive-heading-filter-tests && ./adaptive-heading-filter-tests
+
       - name: Install firmware conversion tools
         run: cargo install cargo-binutils cargo-hex-to-uf2 --locked
 
