@@ -51,6 +51,7 @@ use rmk::matrix::Matrix;
 use rmk::split::ble::central::scan_peripherals;
 use rmk::split::central::run_peripheral_manager;
 use rmk::types::action::Action;
+use rmk::types::fork::{Fork, StateBits};
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::types::morse::MorseMode;
 use rmk::usb::UsbTransport;
@@ -247,6 +248,36 @@ async fn main(spawner: Spawner) {
         .default_profile
         .with_mode(Some(MorseMode::HoldOnOtherPress))
         .with_hold_timeout_ms(Some(220));
+    let windows_modifier = StateBits {
+        modifiers: rmk::types::modifier::ModifierCombination::LGUI,
+        ..StateBits::default()
+    };
+    behavior_config
+        .fork
+        .forks
+        .push(Fork::new(
+            rmk::k!(MouseWheelUp),
+            rmk::k!(MouseWheelUp),
+            rmk::k!(KbVolumeUp),
+            windows_modifier,
+            StateBits::default(),
+            rmk::types::modifier::ModifierCombination::default(),
+            false,
+        ))
+        .unwrap();
+    behavior_config
+        .fork
+        .forks
+        .push(Fork::new(
+            rmk::k!(MouseWheelDown),
+            rmk::k!(MouseWheelDown),
+            rmk::k!(KbVolumeDown),
+            windows_modifier,
+            StateBits::default(),
+            rmk::types::modifier::ModifierCombination::default(),
+            false,
+        ))
+        .unwrap();
     behavior_config
         .morse
         .morses
