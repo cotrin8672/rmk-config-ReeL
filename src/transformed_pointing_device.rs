@@ -12,6 +12,9 @@ use crate::motion_chunk::take_proportional_i8_chunk;
 use crate::motion_gain::MotionGain;
 use crate::trackball_transform::TrackballTransform;
 
+const TRAVERSAL_ENTER_THRESHOLD: i32 = 8;
+const TRAVERSAL_EXIT_THRESHOLD: i32 = 4;
+
 #[processor(subscribe = [PointingSetCpiEvent])]
 #[input_device(publish = PointingEvent)]
 pub struct TransformingPointingDevice<S: PointingDriver> {
@@ -29,6 +32,7 @@ pub struct TransformingPointingDevice<S: PointingDriver> {
     last_heading_motion: Option<Instant>,
     requested_cpi: Option<u16>,
     transform: TrackballTransform,
+    traversal: bool,
     heading_filter: AdaptiveHeadingFilter,
     gain: MotionGain,
 }
@@ -57,6 +61,7 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             last_heading_motion: None,
             requested_cpi: None,
             transform: TrackballTransform::new(),
+            traversal: false,
             heading_filter: AdaptiveHeadingFilter::new(),
             gain: MotionGain::new(),
         }
@@ -142,7 +147,16 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
         let raw_y = take_i16_chunk(&mut self.accumulated_y);
 
         let (x, y) = self.transform.apply(raw_x, raw_y, current_matrix());
-        let (x, y) = self.heading_filter.apply(x, y);
+        let traversal = next_traversal_state(self.traversal, x, y);
+        if traversal != self.traversal {
+            self.traversal = traversal;
+            self.heading_filter.reset_heading();
+        }
+        let (x, y) = if self.traversal {
+            self.heading_filter.apply(x, y)
+        } else {
+            (x, y)
+        };
         let (x, y) = self.gain.apply(x, y);
         self.pending_report_x = self.pending_report_x.saturating_add(i32::from(x));
         self.pending_report_y = self.pending_report_y.saturating_add(i32::from(y));
@@ -258,4 +272,42 @@ fn take_i16_chunk(value: &mut i32) -> i16 {
     let chunk = (*value).clamp(i32::from(i16::MIN), i32::from(i16::MAX));
     *value -= chunk;
     chunk as i16
+}
+
+fn next_traversal_state(traversal: bool, x: i16, y: i16) -> bool {
+    let motion = i32::from(x).abs() + i32::from(y).abs();
+
+    if traversal {
+        motion > TRAVERSAL_EXIT_THRESHOLD
+    } else {
+        motion >= TRAVERSAL_ENTER_THRESHOLD
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn precision_enters_traversal_at_enter_threshold() {
+        assert!(!next_traversal_state(false, 7, 0));
+        assert!(next_traversal_state(false, 7, 1));
+    }
+
+    #[test]
+    fn traversal_exits_at_exit_threshold() {
+        assert!(next_traversal_state(true, 5, 0));
+        assert!(!next_traversal_state(true, 3, 1));
+    }
+
+    #[test]
+    fn hysteresis_band_keeps_current_state() {
+        assert!(!next_traversal_state(false, 5, 1));
+        assert!(next_traversal_state(true, 5, 1));
+    }
+
+    #[test]
+    fn motion_magnitude_handles_i16_extremes() {
+        assert!(next_traversal_state(false, i16::MIN, i16::MIN));
+    }
 }
