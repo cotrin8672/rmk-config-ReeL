@@ -113,24 +113,24 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
         }
     }
 
-    fn take_report_event(&mut self) -> Option<PointingEvent> {
-        if self.pending_report_x == 0 && self.pending_report_y == 0 {
-            if self.accumulated_x == 0 && self.accumulated_y == 0 {
-                return None;
-            }
-
-            // Keep any raw motion beyond i16 until a later report. The
-            // transform is defined for one i16 motion vector at a time, so
-            // split only at this boundary instead of discarding the excess.
-            let raw_x = take_i16_chunk(&mut self.accumulated_x);
-            let raw_y = take_i16_chunk(&mut self.accumulated_y);
-
-            let (x, y) = self.transform.apply(raw_x, raw_y, current_matrix());
-            let (x, y) = self.gain.apply(x, y);
-            self.pending_report_x = i32::from(x);
-            self.pending_report_y = i32::from(y);
+    fn merge_accumulated_motion(&mut self) {
+        if self.accumulated_x == 0 && self.accumulated_y == 0 {
+            return;
         }
 
+        // Keep any raw motion beyond i16 until a later report. The transform
+        // is defined for one i16 motion vector at a time, so split only at
+        // this boundary instead of discarding the excess.
+        let raw_x = take_i16_chunk(&mut self.accumulated_x);
+        let raw_y = take_i16_chunk(&mut self.accumulated_y);
+
+        let (x, y) = self.transform.apply(raw_x, raw_y, current_matrix());
+        let (x, y) = self.gain.apply(x, y);
+        self.pending_report_x = self.pending_report_x.saturating_add(i32::from(x));
+        self.pending_report_y = self.pending_report_y.saturating_add(i32::from(y));
+    }
+
+    fn take_pending_report(&mut self) -> Option<PointingEvent> {
         if self.pending_report_x == 0 && self.pending_report_y == 0 {
             return None;
         }
@@ -169,10 +169,6 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             || self.pending_report_y != 0
     }
 
-    fn has_pending_report(&self) -> bool {
-        self.pending_report_x != 0 || self.pending_report_y != 0
-    }
-
     async fn read_pointing_event(&mut self) -> PointingEvent {
         use rmk::embassy_futures::select::{Either, select};
 
@@ -184,21 +180,13 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
         }
 
         loop {
-            // A transformed vector may need multiple i8 HID reports. Drain its
-            // proportional chunks immediately; the transport provides any
-            // required backpressure. The report deadline still controls when a
-            // new accumulated sensor vector is transformed.
-            if self.has_pending_report()
-                && let Some(event) = self.take_report_event()
-            {
-                return event;
-            }
             // Check the deadline before waiting for another sensor edge. This
             // is also the tie-breaker when MOTION remains asserted and both
             // futures are ready.
             if self.has_report_data() && self.last_report.elapsed() >= self.report_interval {
                 self.last_report = Instant::now();
-                if let Some(event) = self.take_report_event() {
+                self.merge_accumulated_motion();
+                if let Some(event) = self.take_pending_report() {
                     return event;
                 }
             }
@@ -234,7 +222,8 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             match select(report_wait, poll_wait).await {
                 Either::First(_) => {
                     self.last_report = Instant::now();
-                    if let Some(event) = self.take_report_event() {
+                    self.merge_accumulated_motion();
+                    if let Some(event) = self.take_pending_report() {
                         return event;
                     }
                 }
