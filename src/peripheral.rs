@@ -174,6 +174,7 @@ async fn main(spawner: Spawner) {
     nrf_config.dcdc.reg0 = true;
     nrf_config.dcdc.reg1 = true;
     let p = embassy_nrf::init(nrf_config);
+    let _charge_current = Output::new(p.P0_13, Level::Low, OutputDrive::Standard);
 
     let mut lcd_spi_config = spim::Config::default();
     lcd_spi_config.frequency = spim::Frequency::M1;
