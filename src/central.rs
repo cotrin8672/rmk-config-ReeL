@@ -59,20 +59,13 @@ use rmk::{AutoMouseLayerRunner, KeymapData, initialize_keymap_and_storage, run_a
 use static_cell::StaticCell;
 
 use mouse_layer_priority::{AUTO_MOUSE_LAYER, MouseLayerPriority};
-use profile_cpi_config::{
-    PROFILE_CPI_FLASH_SIZE, PROFILE_CPI_FLASH_START, ProfileCpiConfigWatcher,
-};
+use profile_cpi_config::ProfileCpiConfigWatcher;
 use quick_mod_tap::QuickModTap;
 use sharp_lcd::new_status_lcd;
 use smart_aml_trigger::SmartAutoMouseTrigger;
 use transformed_pointing_device::TransformingPointingDevice;
 use vial::{VIAL_KEYBOARD_DEF, VIAL_KEYBOARD_ID};
 use xiao_battery::{DIVIDER_MEASURED, DIVIDER_TOTAL, XiaoBatteryMonitor, XiaoChargingStateReader};
-
-use calibration_config::{
-    CALIBRATION_FLASH_SIZE, CALIBRATION_FLASH_START, CalibrationConfigWatcher,
-    RMK_STORAGE_FLASH_SIZE, RMK_STORAGE_FLASH_START, recover_legacy_matrix,
-};
 
 bind_interrupts!(struct Irqs {
     USBD => usb::InterruptHandler<USBD>;
@@ -191,22 +184,6 @@ async fn main(spawner: Spawner) {
     let usb_driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
     let shared_flash = SHARED_FLASH.init(Mutex::new(Flash::take(mpsl, p.NVMC)));
     let storage_flash = Partition::new(shared_flash, 0, NRF52840_FLASH_SIZE);
-    let mut legacy_calibration_flash = Partition::new(
-        shared_flash,
-        RMK_STORAGE_FLASH_START,
-        RMK_STORAGE_FLASH_SIZE,
-    );
-    let migration_matrix = recover_legacy_matrix(&mut legacy_calibration_flash).await;
-    let calibration_flash = Partition::new(
-        shared_flash,
-        CALIBRATION_FLASH_START,
-        CALIBRATION_FLASH_SIZE,
-    );
-    let profile_cpi_flash = Partition::new(
-        shared_flash,
-        PROFILE_CPI_FLASH_START,
-        PROFILE_CPI_FLASH_SIZE,
-    );
 
     let (row_pins, col_pins) = config_matrix_pins_nrf!(
         peripherals: p,
@@ -320,16 +297,7 @@ async fn main(spawner: Spawner) {
     let debouncer = DefaultDebouncer::new();
     let mut matrix = Matrix::<_, _, _, 4, 5, true, 0, 6>::new(row_pins, col_pins, debouncer);
     let mut keyboard = Keyboard::new(&keymap);
-    let host_context = rmk::host::KeyboardContext::new(&keymap);
-    let mut calibration_config = CalibrationConfigWatcher::with_migration(
-        &host_context,
-        calibration_flash,
-        migration_matrix,
-    );
-    calibration_config.initialize().await;
-    let mut profile_cpi_config =
-        ProfileCpiConfigWatcher::new(&host_context, profile_cpi_flash, TRACKBALL_DEVICE_ID);
-    profile_cpi_config.initialize().await;
+    let mut profile_cpi_config = ProfileCpiConfigWatcher::new(TRACKBALL_DEVICE_ID);
     let host_service = HostService::new(&keymap, &rmk_config);
 
     let pmw_sck = Output::new(p.P1_13, Level::High, OutputDrive::Standard);
@@ -386,7 +354,6 @@ async fn main(spawner: Spawner) {
         mouse_layer_priority,
         pointing_processor,
         auto_mouse_layer,
-        calibration_config,
         profile_cpi_config,
         storage,
         usb_transport,
