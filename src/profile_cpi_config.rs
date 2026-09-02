@@ -38,7 +38,6 @@ impl ProfileCpiConfigWatcher {
             self.apply_active_profile().await;
         }
     }
-
 }
 
 impl Runnable for ProfileCpiConfigWatcher {
