@@ -39,13 +39,6 @@ impl ProfileCpiConfigWatcher {
         }
     }
 
-    async fn restore_current_profile(&mut self) {
-        self.active_profile = rmk::state::current_connection_status()
-            .ble
-            .profile
-            .min((PROFILE_COUNT - 1) as u8);
-        self.apply_active_profile().await;
-    }
 }
 
 impl Runnable for ProfileCpiConfigWatcher {
@@ -53,7 +46,7 @@ impl Runnable for ProfileCpiConfigWatcher {
         let mut connection_subscriber = ConnectionStatusChangeEvent::subscriber();
         let mut sleep_subscriber = SleepStateEvent::subscriber();
         Timer::after(INITIAL_APPLY_DELAY).await;
-        self.restore_current_profile().await;
+        self.apply_active_profile().await;
 
         loop {
             match select(
@@ -64,7 +57,7 @@ impl Runnable for ProfileCpiConfigWatcher {
             {
                 Either::First(sleep) if sleep.0 => {
                     while sleep_subscriber.next_event().await.0 {}
-                    self.restore_current_profile().await;
+                    self.apply_active_profile().await;
                 }
                 Either::First(_) => {}
                 Either::Second(event) => self.update_profile(event.0.ble.profile).await,
