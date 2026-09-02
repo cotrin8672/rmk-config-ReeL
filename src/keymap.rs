@@ -15,10 +15,12 @@ const GUI_SHIFT: ModifierCombination = ModifierCombination::new()
     .with_left_gui(true)
     .with_left_shift(true);
 
-const HOLD_PREFERRED_PROFILE: MorseProfile =
+pub const HOLD_PREFERRED_PROFILE: MorseProfile =
     MorseProfile::new(None, Some(MorseMode::HoldOnOtherPress), None, None);
-const BALANCED_LAYER_TAP_PROFILE: MorseProfile =
+pub const BALANCED_LAYER_TAP_PROFILE: MorseProfile =
     MorseProfile::new(None, Some(MorseMode::PermissiveHold), None, None);
+const HOLD_PREFERRED_PROFILE_INDEX: u8 = 0;
+const BALANCED_LAYER_TAP_PROFILE_INDEX: u8 = 1;
 
 #[rustfmt::skip]
 pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
@@ -27,7 +29,7 @@ pub const fn get_default_keymap() -> [[[KeyAction; COL]; ROW]; NUM_LAYER] {
             [k!(T), k!(R), k!(E), k!(W), k!(Q), a!(No), k!(P), k!(O), k!(I), k!(U), k!(Y)],
             [k!(G), k!(F), k!(D), k!(S), k!(A), mt!(Escape, ModifierCombination::LCTRL), mt!(Semicolon, CTRL_SHIFT), k!(L), k!(K), k!(J), k!(H)],
             [k!(B), k!(V), k!(C), k!(X), k!(Z), k!(LGui), k!(Slash), k!(Dot), k!(Comma), k!(M), k!(N)],
-            [k!(MouseBtn5), k!(MouseBtn4), mtp!(Language2, ModifierCombination::LSHIFT, HOLD_PREFERRED_PROFILE), ltp!(1, Space, BALANCED_LAYER_TAP_PROFILE), mt!(Language1, ModifierCombination::LALT), a!(No), k!(Minus), k!(Tab), ltp!(2, Enter, BALANCED_LAYER_TAP_PROFILE), td!(0), a!(No)],
+            [k!(MouseBtn5), k!(MouseBtn4), mtp!(Language2, ModifierCombination::LSHIFT, HOLD_PREFERRED_PROFILE_INDEX), ltp!(1, Space, BALANCED_LAYER_TAP_PROFILE_INDEX), mt!(Language1, ModifierCombination::LALT), a!(No), k!(Minus), k!(Tab), ltp!(2, Enter, BALANCED_LAYER_TAP_PROFILE_INDEX), td!(0), a!(No)],
         ],
         [
             [k!(Kc5), k!(Kc4), k!(Kc3), k!(Kc2), k!(Kc1), a!(No), k!(Kc0), k!(Kc9), k!(Kc8), k!(Kc7), k!(Kc6)],

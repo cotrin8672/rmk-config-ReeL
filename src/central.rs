@@ -36,30 +36,26 @@ use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
-use rmk::ble::{BleTransport, build_ble_stack};
+use rmk::ble::BleTransport;
 use rmk::config::{
     AutoMouseLayerConfig, BehaviorConfig, BleBatteryConfig, DeviceConfig, PositionalConfig,
     RmkConfig, StorageConfig, VialConfig,
 };
 use rmk::debounce::default_debouncer::DefaultDebouncer;
-use rmk::futures::future::join;
 use rmk::host::HostService;
 use rmk::input_device::battery::BatteryProcessor;
 use rmk::input_device::pmw3610::{BitBangSpiBus, Pmw3610, Pmw3610Config};
 use rmk::input_device::pointing::{PointingProcessor, PointingProcessorConfig};
 use rmk::keyboard::Keyboard;
 use rmk::matrix::Matrix;
-use rmk::split::ble::central::scan_peripherals;
-use rmk::split::central::run_peripheral_manager;
+use rmk::split::PeripheralMatrixConfig;
 use rmk::types::action::Action;
 use rmk::types::fork::{Fork, StateBits};
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::types::morse::MorseMode;
 use rmk::usb::UsbTransport;
 use rmk::watchdog::Nrf52Watchdog;
-use rmk::{
-    AutoMouseLayerRunner, HostResources, KeymapData, initialize_keymap_and_storage, run_all,
-};
+use rmk::{AutoMouseLayerRunner, KeymapData, initialize_keymap_and_storage, run_all};
 use static_cell::StaticCell;
 
 use mouse_layer_priority::{AUTO_MOUSE_LAYER, MouseLayerPriority};
@@ -191,8 +187,6 @@ async fn main(spawner: Spawner) {
     let mut rng = rng::Rng::new(p.RNG, Irqs);
     let mut sdc_memory = sdc::Mem::<6080>::new();
     let sdc = unwrap!(build_sdc(sdc_peripherals, &mut rng, mpsl, &mut sdc_memory));
-    let mut host_resources = HostResources::new();
-    let stack = build_ble_stack(sdc, ble_addr(), &mut host_resources).await;
 
     let usb_driver = Driver::new(p.USBD, Irqs, HardwareVbusDetect::new(Irqs));
     let shared_flash = SHARED_FLASH.init(Mutex::new(Flash::take(mpsl, p.NVMC)));
@@ -249,6 +243,16 @@ async fn main(spawner: Spawner) {
         .default_profile
         .with_mode(Some(MorseMode::HoldOnOtherPress))
         .with_hold_timeout_ms(Some(220));
+    behavior_config
+        .morse
+        .profiles
+        .push(keymap::HOLD_PREFERRED_PROFILE)
+        .unwrap();
+    behavior_config
+        .morse
+        .profiles
+        .push(keymap::BALANCED_LAYER_TAP_PROFILE)
+        .unwrap();
     let windows_modifier = StateBits {
         modifiers: rmk::types::modifier::ModifierCombination::LGUI,
         ..StateBits::default()
@@ -326,7 +330,7 @@ async fn main(spawner: Spawner) {
     let mut profile_cpi_config =
         ProfileCpiConfigWatcher::new(&host_context, profile_cpi_flash, TRACKBALL_DEVICE_ID);
     profile_cpi_config.initialize().await;
-    let mut host_service = HostService::new(&host_context, &rmk_config);
+    let host_service = HostService::new(&keymap, &rmk_config);
 
     let pmw_sck = Output::new(p.P1_13, Level::High, OutputDrive::Standard);
     let pmw_sdio = Flex::new(p.P1_15);
@@ -359,37 +363,41 @@ async fn main(spawner: Spawner) {
     );
     let mut auto_mouse_layer = AutoMouseLayerRunner::new(&keymap);
 
-    let peripheral_addrs = storage.read_peripheral_addresses::<1>().await;
-    let mut usb_transport = UsbTransport::new(usb_driver, rmk_config.device_config);
-    let mut ble_transport = BleTransport::new(&stack, rmk_config).await;
+    let mut usb_transport =
+        UsbTransport::new(usb_driver, rmk_config.device_config).with_host_service(&host_service);
+    let mut ble_transport = BleTransport::new(
+        sdc,
+        ble_addr(),
+        rmk_config,
+        [PeripheralMatrixConfig {
+            rows: 4,
+            cols: 6,
+            row_offset: 0,
+            col_offset: 0,
+        }],
+    )
+    .with_host_service(&host_service);
     let mut watchdog = Nrf52Watchdog::default_runner(p.WDT);
 
-    join(
-        run_all!(
-            matrix,
-            trackball,
-            smart_aml_trigger,
-            mouse_layer_priority,
-            pointing_processor,
-            auto_mouse_layer,
-            calibration_config,
-            profile_cpi_config,
-            storage,
-            usb_transport,
-            ble_transport,
-            keyboard,
-            host_service,
-            watchdog,
-            battery_monitor,
-            battery_processor,
-            charging_state_reader,
-            lcd,
-            lcd_vcom
-        ),
-        join(
-            run_peripheral_manager::<4, 6, 0, 0, _>(0, &peripheral_addrs, &stack),
-            scan_peripherals(&stack, &peripheral_addrs),
-        ),
+    run_all!(
+        matrix,
+        trackball,
+        smart_aml_trigger,
+        mouse_layer_priority,
+        pointing_processor,
+        auto_mouse_layer,
+        calibration_config,
+        profile_cpi_config,
+        storage,
+        usb_transport,
+        ble_transport,
+        keyboard,
+        watchdog,
+        battery_monitor,
+        battery_processor,
+        charging_state_reader,
+        lcd,
+        lcd_vcom
     )
     .await;
 }

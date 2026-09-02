@@ -5,26 +5,26 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-rmk = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172", features = [
+rmk = { git = "https://github.com/rmk-rs/rmk.git", rev = "986017d901c7609a9a79167686524f014effa68a", features = [
     "nrf52840_ble",
     "split",
     "async_matrix",
     "adafruit_bl",
     "display",
 ] }
-rmk-types = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172" }
-nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
+rmk-types = { git = "https://github.com/rmk-rs/rmk.git", rev = "986017d901c7609a9a79167686524f014effa68a" }
+nrf-sdc = { version = "0.4.0", features = [
     "defmt",
     "peripheral",
     "central",
     "nrf52840",
 ] }
-nrf-mpsl = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
+nrf-mpsl = { version = "0.4.0", features = [
     "defmt",
     "critical-section-impl",
     "nrf52840",
 ] }
-bt-hci = { version = "0.9", features = ["defmt"] }
+bt-hci = { version = "0.10", features = ["defmt"] }
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.5"
 embassy-time = { version = "0.5", features = [

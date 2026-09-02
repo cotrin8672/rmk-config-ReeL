@@ -22,7 +22,7 @@ use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
-use rmk::ble::build_ble_stack;
+use rmk::RawMutex;
 use rmk::config::StorageConfig;
 use rmk::core_traits::Runnable;
 use rmk::debounce::default_debouncer::DefaultDebouncer;
@@ -33,9 +33,8 @@ use rmk::input_device::rotary_encoder::Direction;
 use rmk::matrix::Matrix;
 use rmk::run_all;
 use rmk::split::peripheral::run_rmk_split_peripheral;
-use rmk::storage::new_storage_for_split_peripheral;
+use rmk::storage::new_storage_without_keymap;
 use rmk::watchdog::Nrf52Watchdog;
-use rmk::{HostResources, RawMutex};
 use static_cell::StaticCell;
 
 use rotary_decoder::{ClockedDetentDecoder, Detent};
@@ -218,8 +217,6 @@ async fn main(spawner: Spawner) {
     let mut rng = rng::Rng::new(p.RNG, Irqs);
     let mut sdc_memory = sdc::Mem::<4696>::new();
     let sdc = unwrap!(build_sdc(sdc_peripherals, &mut rng, mpsl, &mut sdc_memory));
-    let mut host_resources = HostResources::new();
-    let stack = build_ble_stack(sdc, ble_addr(), &mut host_resources).await;
 
     let (row_pins, col_pins) = config_matrix_pins_nrf!(
         peripherals: p,
@@ -233,7 +230,7 @@ async fn main(spawner: Spawner) {
         ..Default::default()
     };
     let flash = Flash::take(mpsl, p.NVMC);
-    let mut storage = new_storage_for_split_peripheral(flash, storage_config).await;
+    let mut storage = new_storage_without_keymap(flash, storage_config).await;
 
     let debouncer = DefaultDebouncer::new();
     let mut matrix = Matrix::<_, _, _, 4, 6, true>::new(row_pins, col_pins, debouncer);
@@ -256,7 +253,7 @@ async fn main(spawner: Spawner) {
             lcd,
             lcd_vcom
         ),
-        run_rmk_split_peripheral(0, &stack),
+        run_rmk_split_peripheral(0, sdc, ble_addr()),
     )
     .await;
 }
