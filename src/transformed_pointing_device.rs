@@ -2,17 +2,18 @@ use core::future::pending;
 
 use embassy_time::{Duration, Instant, Timer};
 use embedded_hal_async::digital::Wait;
-use rmk::event::{Axis, AxisEvent, AxisValType, PointingEvent, PointingSetCpiEvent};
+use rmk::core_traits::Runnable;
+use rmk::event::{
+    Axis, AxisEvent, AxisValType, EventSubscriber, PointingEvent, PointingSetCpiEvent,
+    SubscribableEvent, publish_event,
+};
 use rmk::input_device::pointing::{InitState, PointingDriver};
-use rmk::macros::{input_device, processor};
 
 use crate::calibration_config::current_matrix;
 use crate::motion_chunk::take_proportional_i8_chunk;
 use crate::motion_gain::MotionGain;
 use crate::trackball_transform::TrackballTransform;
 
-#[processor(subscribe = [PointingSetCpiEvent])]
-#[input_device(publish = PointingEvent)]
 pub struct TransformingPointingDevice<S: PointingDriver> {
     sensor: S,
     init_state: InitState,
@@ -28,6 +29,23 @@ pub struct TransformingPointingDevice<S: PointingDriver> {
     requested_cpi: Option<u16>,
     transform: TrackballTransform,
     gain: MotionGain,
+}
+
+impl<S: PointingDriver> Runnable for TransformingPointingDevice<S> {
+    async fn run(&mut self) -> ! {
+        use rmk::embassy_futures::select::{Either, select};
+
+        let mut cpi_subscriber = PointingSetCpiEvent::subscriber();
+
+        loop {
+            match select(self.read_pointing_event(), cpi_subscriber.next_event()).await {
+                // Immediate publication evicts the oldest queued pointing
+                // event under backpressure, keeping sensor polling responsive.
+                Either::First(event) => publish_event(event),
+                Either::Second(event) => self.on_pointing_set_cpi_event(event).await,
+            }
+        }
+    }
 }
 
 impl<S: PointingDriver> TransformingPointingDevice<S> {
