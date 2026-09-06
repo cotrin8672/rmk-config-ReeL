@@ -15,7 +15,7 @@ use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Async;
 use embassy_nrf::peripherals::{RNG, SPI3, USBD};
 use embassy_nrf::saadc::Input as _;
-use embassy_nrf::{bind_interrupts, rng, saadc, spim, usb};
+use embassy_nrf::{bind_interrupts, gpiote, rng, saadc, spim, usb};
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use nrf_mpsl::Flash;
@@ -99,18 +99,39 @@ fn ble_addr() -> [u8; 6] {
 /// comes from signed raw Gray-code movement captured around that A edge, so
 /// phase B is never sampled at a fragile fixed time relative to A.
 struct LeftRotaryEncoder {
-    pin_a: Input<'static>,
-    pin_b: Input<'static>,
+    pin_a: gpiote::InputChannel<'static>,
+    pin_b: gpiote::InputChannel<'static>,
     decoder: ClockedDetentDecoder,
+    last_levels: (bool, bool),
 }
 
 impl LeftRotaryEncoder {
-    fn new(pin_a: Input<'static>, pin_b: Input<'static>) -> Self {
-        let decoder = ClockedDetentDecoder::new(pin_a.is_high(), pin_b.is_high());
+    fn levels() -> (bool, bool) {
+        // Both encoder pins are on P1. Read the port once so A/B belong to
+        // the same instant; two Input::is_high calls can be torn by an IRQ.
+        let port = embassy_nrf::pac::P1.in_().read();
+        (port.pin(14), port.pin(15))
+    }
+
+    fn new(pin_a: gpiote::InputChannel<'static>, pin_b: gpiote::InputChannel<'static>) -> Self {
+        let last_levels = Self::levels();
+        let decoder = ClockedDetentDecoder::new(last_levels.0, last_levels.1);
         Self {
             pin_a,
             pin_b,
             decoder,
+            last_levels,
+        }
+    }
+
+    async fn feed(&mut self, levels: (bool, bool)) {
+        self.last_levels = levels;
+        if let Some(detent) = self.decoder.update(levels.0, levels.1) {
+            let direction = match detent {
+                Detent::Clockwise => Direction::Clockwise,
+                Detent::CounterClockwise => Direction::CounterClockwise,
+            };
+            ENCODER_DIRECTION_CHANNEL.send(direction).await;
         }
     }
 }
@@ -139,26 +160,26 @@ impl Runnable for LeftRotaryEncoder {
         const SAMPLE_PERIOD_TICKS: u64 = 2;
 
         loop {
-            select(
-                self.pin_a.wait_for_any_edge(),
-                self.pin_b.wait_for_any_edge(),
-            )
-            .await;
+            // Dedicated GPIOTE channels latch the first edge while the CPU is
+            // asleep. Re-read after arming so an edge in the rearm window is
+            // fed instead of being cleared and lost.
+            let levels = {
+                let wait_a = self.pin_a.wait();
+                let wait_b = self.pin_b.wait();
+                let armed_levels = Self::levels();
+                if armed_levels == self.last_levels {
+                    select(wait_a, wait_b).await;
+                }
+                Self::levels()
+            };
+            self.feed(levels).await;
 
             loop {
-                let levels = (self.pin_a.is_high(), self.pin_b.is_high());
-                if let Some(detent) = self.decoder.update(levels.0, levels.1) {
-                    let direction = match detent {
-                        Detent::Clockwise => Direction::Clockwise,
-                        Detent::CounterClockwise => Direction::CounterClockwise,
-                    };
-                    ENCODER_DIRECTION_CHANNEL.send(direction).await;
-                }
-
                 if self.decoder.is_idle() {
                     break;
                 }
                 Timer::after_ticks(SAMPLE_PERIOD_TICKS).await;
+                self.feed(Self::levels()).await;
             }
         }
     }
@@ -238,8 +259,18 @@ async fn main(spawner: Spawner) {
 
     let debouncer = DefaultDebouncer::new();
     let mut matrix = Matrix::<_, _, _, 4, 6, true>::new(row_pins, col_pins, debouncer);
-    let encoder_a = Input::new(p.P1_14, Pull::Up);
-    let encoder_b = Input::new(p.P1_15, Pull::Up);
+    let encoder_a = gpiote::InputChannel::new(
+        p.GPIOTE_CH0,
+        p.P1_14,
+        Pull::Up,
+        gpiote::InputChannelPolarity::Toggle,
+    );
+    let encoder_b = gpiote::InputChannel::new(
+        p.GPIOTE_CH1,
+        p.P1_15,
+        Pull::Up,
+        gpiote::InputChannelPolarity::Toggle,
+    );
     let mut encoder = LeftRotaryEncoder::new(encoder_a, encoder_b);
     spawner.spawn(encoder_event_task().unwrap());
     let mut watchdog = Nrf52Watchdog::default_runner(p.WDT);

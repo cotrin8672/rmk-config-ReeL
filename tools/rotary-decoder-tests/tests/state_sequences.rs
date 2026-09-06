@@ -11,8 +11,8 @@ const CW_STATES: [u8; 4] = [3, 1, 0, 2];
 #[derive(Clone, Copy, Debug)]
 enum Capture {
     Visible,
-    HiddenEvenBoundary,
-    HiddenOddBoundary,
+    LatchedEvenBoundary,
+    LatchedOddBoundary,
     HiddenEverywhere,
 }
 
@@ -46,11 +46,11 @@ fn click_samples(case: Case, phase: usize, position: i32, cw: bool) -> Vec<u8> {
     let next_position = position + if cw { 1 } else { -1 };
     // A boundary has the same identity when crossed in either direction.
     let parity = position.min(next_position).rem_euclid(2);
-    let hidden = match case.capture {
+    let latched = match case.capture {
         Capture::Visible => false,
-        Capture::HiddenEvenBoundary => parity == 0,
-        Capture::HiddenOddBoundary => parity == 1,
-        Capture::HiddenEverywhere => true,
+        Capture::LatchedEvenBoundary => parity == 0,
+        Capture::LatchedOddBoundary => parity == 1,
+        Capture::HiddenEverywhere => false,
     };
     if case.chatter {
         // B-only chatter, including a level held beyond debounce, must not
@@ -62,9 +62,14 @@ fn click_samples(case: Case, phase: usize, position: i32, cw: bool) -> Vec<u8> {
     }
     let middle = CW_STATES[(phase + if cw { 1 } else { 3 }) % 4];
     let end = CW_STATES[(phase + 2) % 4];
-    if hidden {
-        // The physical middle state exists but was never sampled.
+    if matches!(case.capture, Capture::HiddenEverywhere) {
+        // Counterexample only: both edges occurred before acquisition ran.
         transition(&mut samples, start, end, STABLE, case.bounce);
+    } else if latched {
+        // The periodic sample would miss the middle state. The dedicated
+        // edge wake captures it before periodic settling samples resume.
+        transition(&mut samples, start, middle, 1, case.bounce);
+        transition(&mut samples, middle, end, STABLE, case.bounce);
     } else {
         transition(&mut samples, start, middle, case.edge_gap, case.bounce);
         transition(&mut samples, middle, end, STABLE, case.bounce);
@@ -166,11 +171,9 @@ fn all_visible_six_click_histories_preserve_count_and_order() {
 }
 
 #[test]
-fn alternating_boundary_capture_preserves_count_and_order() {
-    let even = explore(Capture::HiddenEvenBoundary);
-    let odd = explore(Capture::HiddenOddBoundary);
-    // Deliberately a failing contract until capture supplies enough evidence.
-    // Do not turn this into an assertion that stale/missing output is correct.
+fn alternating_boundary_edge_latches_preserve_count_and_order() {
+    let even = explore(Capture::LatchedEvenBoundary);
+    let odd = explore(Capture::LatchedOddBoundary);
     assert_eq!(
         even.failed_cases + odd.failed_cases,
         0,
@@ -183,7 +186,7 @@ fn moving_one_click_changes_boundary_but_must_not_lock_direction() {
     let mut results = Results::default();
     for phase in 0..4 {
         for seed_cw in [false, true] {
-            for capture in [Capture::HiddenEvenBoundary, Capture::HiddenOddBoundary] {
+            for capture in [Capture::LatchedEvenBoundary, Capture::LatchedOddBoundary] {
                 let case = Case {
                     phase,
                     history: u8::from(seed_cw),
