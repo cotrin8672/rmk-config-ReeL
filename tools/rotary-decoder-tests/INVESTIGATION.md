@@ -82,3 +82,72 @@ must not be bypassed to produce or promote a supposedly fixed firmware artifact.
 
 Passing host tests would still not replace physical tests of both directions,
 neighbouring detents, reversal history, slow/fast motion, and one full revolution.
+
+## Acquisition investigation
+
+`tests/acquisition.rs` adds three passing **failure demonstrations**, not claims
+that the firmware is fixed. They drive the real decoder while modelling the
+source's reads/wakeup ordering. The original two failing contracts remain.
+
+1. `peripheral.rs` reads P1.14 then P1.15 via two `Input::is_high()` calls.
+   In embassy-nrf 0.11 each call performs a separate GPIO `IN` register load.
+   Physical CW `11 -> 01 -> 00`, interrupted between the A and B reads, can
+   become observed `11 -> 10 -> 00`: a valid but opposite Gray path. This is
+   worse than merely losing direction. A single P1 `IN` load avoids a torn
+   pair, but still cannot recover two edges occurring between complete reads.
+2. `Flex::wait_for_any_edge()` in embassy-nrf 0.11 chooses `SENSE` opposite to
+   the pin level at its first poll, not opposite to the last decoded sample.
+   If B changes from 0 to 1 between the last decoded `00` and arming the wait,
+   it now waits for B=0. The later A edge wakes the task at `11`, hiding the
+   `01` departure of a CCW reversal. Waiting for a level different from the
+   last decoded level removes that rearm race, but not arbitrary wake latency.
+3. PPI first/last timestamp reconstruction is not full waveform capture.
+   `11 -> 10 -> 11 -> 01 -> 00` is a CW click with harmless rest B chatter,
+   but its first B edge precedes its first A edge. Conversely, CW followed by
+   A bounce (`11 -> 01 -> 00 -> 10 -> 00`) leaves the latest A edge after the
+   latest B edge. Both can be wrongly reconstructed as CCW from timestamps
+   alone. The actual complete streams decode CW. The `615f82b` first-edge
+   implementation also consumes its hint once and rearms only after idle,
+   so continuous chatter can leave later ambiguous clicks without a hint.
+
+Source references (pinned versions):
+
+- [GPIO input load](https://docs.rs/embassy-nrf/0.11.0/src/embassy_nrf/gpio.rs.html)
+- [GPIO wait and interrupt handling](https://docs.rs/embassy-nrf/0.11.0/src/embassy_nrf/gpiote.rs.html)
+- Repository `src/peripheral.rs`, and historical commits `ee901d1`, `615f82b`.
+
+The async `Timer::after_ticks(2)` is a minimum wait, not a guaranteed sampling
+period. Executor work, interrupt latency, and a full direction-channel `.send`
+can lengthen the interval. RMK's downstream events carry direction explicitly;
+the keymap caches encoder layers separately by direction. No downstream
+position-parity state was found that would itself explain alternating detents.
+
+### Required shape of a correction
+
+- Read A/B from one P1 snapshot; retain P1.14/P1.15 assignments and mappings.
+- Capture transitions independently of LCD/BLE task scheduling; store ordered
+  coherent states with timestamps, rather than only first/last edge hints.
+- Keep raw direction evidence separate from A's approximately 1 ms debounce.
+  If feeding captured edges at variable intervals, count elapsed stable time,
+  not calls to `update`; otherwise replay changes the debounce duration.
+- Keep acquisition nonblocking. A bounded buffer needs explicit overflow and
+  missed-edge detection. GPIOTE event flags alone are not a FIFO; a software
+  interrupt collector must also have a verified service-time bound. Merely
+  replacing `select()` with an ISR does not prove lossless capture.
+- Preserve the established A-clock/Gray-direction semantics on complete input.
+  Do not manufacture a direction on an acquisition gap or suppress a valid
+  A-only click while waiting indefinitely for B.
+
+Before claiming such an implementation correct, test the acquisition against
+timestamped physical transitions with independent interrupt/executor delays,
+bounce, stop/rearm races and overflow; then replay its output into the decoder.
+The old hidden-input tests cannot validate a capture fix because they remove
+information before the capture implementation even runs.
+
+These source-level counterexamples establish concrete vulnerabilities, not
+which one dominates this physical unit. Prior logs contain aggregate counts,
+not timestamped A/B traces. The connected-device inventory exposed ReeL over
+Bluetooth and no named SWD probe; it does not provide raw left-side GPIO data.
+The next physical evidence must distinguish zero-movement fallback, nonzero
+wrong-direction evidence, and acquisition gaps, retaining the preceding state
+sequence rather than only CW/CCW totals. Hardware fault is not established.
