@@ -1,4 +1,61 @@
-# Rotary state coverage — 2026-09-06
+# Rotary investigation — correction after physical regression, 2026-09-07
+
+**The earlier conclusions below are retained as historical investigation, not
+current proof. `9f4dc84` regressed on-device and its firmware change is removed.
+The firmware is restored to `90b8b83`; the original reversal bug is unresolved.**
+
+## Evidence correcting the previous conclusion
+
+Cursor's 2026-08-23 transcript records instantaneous/delayed B sampling causing
+one direction to alternate up/down. Changing delay swapped the bad direction.
+The Gray accumulator restored normal continuous rotation with a remaining
+first-event reversal error. Source: local transcript
+`C:/Users/gummy/.cursor/projects/C-Users-gummy-ghq-github-com-cotrin8672-ReeL/agent-transcripts/2d7e6e1e-0880-46a1-b7f3-91fb2dd1480a/2d7e6e1e-0880-46a1-b7f3-91fb2dd1480a.jsonl`,
+user observations at lines 77, 89, 103, and 117. These observations are not
+timestamped electrical traces; historical agent explanations are hypotheses.
+
+Counting B toggles accurately still gives B at only one instant. The raw walk
+`00 -> 10 -> 00 -> 01 -> 11` starts with a cancelled A bounce. Net movement is
+CCW, but the first-A capture reports CW and overrides the correct accumulator.
+`first_edge_regression.rs` fails on `9f4dc84` and passes after removal, for all
+four initial states. This is a synthetic counterexample, not a measured trace.
+
+Capture also rearmed only on decoder idle, while the captured value was passed
+on every sample. Subsequent clicks before idle could reuse the previous
+capture. The test helper incorrectly supplied a fresh hint per click.
+
+The claimed 368,640-click success was not proof of a firmware fix: captured B
+was derived from expected direction, provided only on selected boundaries,
+and the tests did not model cross-phase bounce or actual capture lifetime.
+That hint and decoder API are now removed.
+
+## Current verification
+
+20 tests pass, including the new cancelled-first-A regression and the fully
+visible matrix (20,480 histories / 122,880 clicks). Two unresolved requirement
+tests are explicitly ignored in normal CI; running them explicitly FAILS:
+
+```powershell
+rtk cargo test --manifest-path tools/rotary-decoder-tests/Cargo.toml --target x86_64-pc-windows-msvc --locked --test state_sequences -- --ignored
+```
+
+Their correct count/direction assertions remain intact. Hidden-boundary
+matrices have 23,040 wrong-direction and 40,320 missing clicks over 245,760
+synthetic clicks. The reported sequence fails all 16 variants (16 wrong and
+40 missing). None of these counts is a physical failure-rate estimate.
+
+The next diagnosis needs timestamped A/B transitions and emitted directions
+around the bad reversal at both neighbouring detents. It must distinguish
+missing transitions, previous-click signed evidence, and zero-sum fallback.
+Existing aggregate counts cannot distinguish them. Do not infer physical edge
+loss from unchanged behavior after `90b8b83`; that earlier inference was wrong.
+Do not propose another instantaneous-B or first/last-edge heuristic. Keep A as
+the click clock and establish a failing raw-trace replay before selecting a
+replacement. Build/artifact success is not physical validation.
+
+---
+
+# Historical investigation — superseded where noted above
 
 Base: `edbc0eee771dd848bd3b4f3c1d876b8945eb10d8` (`origin/main`).
 Branch: `codex/rotary-state-coverage`.

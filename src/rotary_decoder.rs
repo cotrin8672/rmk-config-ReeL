@@ -76,7 +76,6 @@ pub struct ClockedDetentDecoder {
     unchanged_samples: u8,
     tracking_a_edge: bool,
     edge_movement: i32,
-    edge_direction: Option<Detent>,
     interval_movement: i32,
     last_direction: Option<Detent>,
 }
@@ -91,7 +90,6 @@ impl ClockedDetentDecoder {
             unchanged_samples: EVIDENCE_IDLE_SAMPLES,
             tracking_a_edge: false,
             edge_movement: 0,
-            edge_direction: None,
             interval_movement: 0,
             last_direction: None,
         }
@@ -106,18 +104,6 @@ impl ClockedDetentDecoder {
     /// direction comes from signed Gray movement accumulated across the
     /// whole click interval rather than B at any selected instant.
     pub fn update(&mut self, a_high: bool, b_high: bool) -> Option<Detent> {
-        self.update_with_edge_b(a_high, b_high, None)
-    }
-
-    /// Feed one raw sample, with B's level captured at the first raw A edge.
-    /// The captured value is preferred only for this A click; normal samples
-    /// keep using signed Gray movement exactly as before.
-    pub fn update_with_edge_b(
-        &mut self,
-        a_high: bool,
-        b_high: bool,
-        edge_b: Option<bool>,
-    ) -> Option<Detent> {
         let state = encode(a_high, b_high);
         if state == self.previous_state {
             self.unchanged_samples = self.unchanged_samples.saturating_add(1);
@@ -134,13 +120,6 @@ impl ClockedDetentDecoder {
         if !self.tracking_a_edge && a_high != self.stable_a {
             self.tracking_a_edge = true;
             self.edge_movement = i32::from(delta);
-            self.edge_direction = edge_b.map(|b| {
-                if !self.stable_a != b {
-                    Detent::Clockwise
-                } else {
-                    Detent::CounterClockwise
-                }
-            });
         } else if self.tracking_a_edge {
             self.edge_movement += i32::from(delta);
         }
@@ -159,16 +138,15 @@ impl ClockedDetentDecoder {
             } else {
                 self.interval_movement
             };
-            let direction = self.edge_direction.or(if movement > 0 {
+            let direction = if movement > 0 {
                 Some(Detent::Clockwise)
             } else if movement < 0 {
                 Some(Detent::CounterClockwise)
             } else {
                 self.last_direction
-            });
+            };
             self.tracking_a_edge = false;
             self.edge_movement = 0;
-            self.edge_direction = None;
             self.interval_movement = 0;
             if let Some(direction) = direction {
                 self.last_direction = Some(direction);
@@ -184,7 +162,6 @@ impl ClockedDetentDecoder {
         {
             self.tracking_a_edge = false;
             self.edge_movement = 0;
-            self.edge_direction = None;
         }
 
         // A completed click can leave a trailing B transition in the next
