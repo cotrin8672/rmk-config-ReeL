@@ -155,13 +155,16 @@ impl ClockedDetentDecoder {
         }
 
         // A glitch returned to its accepted level instead of becoming a
-        // click. Discard only its local evidence.
+        // click. Close both evidence windows: otherwise a missed bounce
+        // transition can leave an uncancelled interval sum that is reused
+        // by the next click before the all-input-idle timeout expires.
         if self.tracking_a_edge
             && self.run_a >= DEBOUNCE_SAMPLES
             && self.candidate_a == self.stable_a
         {
             self.tracking_a_edge = false;
             self.edge_movement = 0;
+            self.interval_movement = 0;
         }
 
         // A completed click can leave a trailing B transition in the next

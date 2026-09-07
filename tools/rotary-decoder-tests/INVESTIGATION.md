@@ -2,7 +2,29 @@
 
 **The earlier conclusions below are retained as historical investigation, not
 current proof. `9f4dc84` regressed on-device and its firmware change is removed.
-The firmware is restored to `90b8b83`; the original reversal bug is unresolved.**
+The firmware uses `90b8b83` plus the scoped correction below. Physical reversal
+behavior has not yet been verified for this correction.**
+
+## Correction: close the cancelled A window completely
+
+When A debounces back to its accepted level, the old decoder cleared
+`edge_movement` but retained `interval_movement`. A bounce containing a sampled
+two-bit return can leave a nonzero signed residue. A cancellation confirms
+after 16 identical A samples, whereas the independent unchanged-input counter
+has reached only 15. A reversal starting then can use the old residue through
+the interval fallback. Continuing B chatter can also postpone idle cleanup.
+
+The fix clears `interval_movement` at the same cancellation boundary as
+`edge_movement`. A-clock timing, Gray summation and output mappings are retained.
+This is not a first-edge direction hint, delayed B read, or removal of clicks.
+
+`aborted_a_window_cannot_donate_direction_to_the_next_click` failed before the
+one-line fix (CW instead of CCW at initial 00). It now passes 48 combinations:
+four initial A/B states, unknown/CW/CCW history, and four rest durations. No
+private-state injection or expected-direction input is used. The waveforms
+are synthetic; they establish this code defect, not its prevalence on-device.
+Normal host suite: 21 passed, 2 explicitly ignored unresolved collapsed-input
+contracts. Those two contracts are not claimed fixed by this patch.
 
 ## Evidence correcting the previous conclusion
 
