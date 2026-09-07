@@ -13,9 +13,9 @@ use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Async;
-use embassy_nrf::peripherals::{RNG, SPI3, USBD};
+use embassy_nrf::peripherals::{PPI_CH0, PPI_CH1, PPI_GROUP0, RNG, SPI3, USBD};
 use embassy_nrf::saadc::Input as _;
-use embassy_nrf::{bind_interrupts, gpiote, rng, saadc, spim, usb};
+use embassy_nrf::{bind_interrupts, gpiote, ppi, rng, saadc, spim, timer, usb};
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use nrf_mpsl::Flash;
@@ -102,10 +102,17 @@ struct LeftRotaryEncoder {
     pin_a: gpiote::InputChannel<'static>,
     pin_b: gpiote::InputChannel<'static>,
     decoder: ClockedDetentDecoder,
+    b_edge_counter: timer::Timer<'static>,
+    _count_b: ppi::Ppi<'static, PPI_CH0, 1, 1>,
+    _capture_on_a: ppi::Ppi<'static, PPI_CH1, 1, 2>,
+    capture_group: ppi::PpiGroup<'static, PPI_GROUP0>,
+    capture_base_b: bool,
     last_levels: (bool, bool),
 }
 
 impl LeftRotaryEncoder {
+    const CAPTURE_UNSET: u32 = u32::MAX;
+
     fn levels() -> (bool, bool) {
         // Both encoder pins are on P1. Read the port once so A/B belong to
         // the same instant; two Input::is_high calls can be torn by an IRQ.
@@ -113,20 +120,53 @@ impl LeftRotaryEncoder {
         (port.pin(14), port.pin(15))
     }
 
-    fn new(pin_a: gpiote::InputChannel<'static>, pin_b: gpiote::InputChannel<'static>) -> Self {
+    fn new(
+        pin_a: gpiote::InputChannel<'static>,
+        pin_b: gpiote::InputChannel<'static>,
+        b_edge_counter: timer::Timer<'static>,
+        count_b: ppi::Ppi<'static, PPI_CH0, 1, 1>,
+        capture_on_a: ppi::Ppi<'static, PPI_CH1, 1, 2>,
+        capture_group: ppi::PpiGroup<'static, PPI_GROUP0>,
+    ) -> Self {
         let last_levels = Self::levels();
         let decoder = ClockedDetentDecoder::new(last_levels.0, last_levels.1);
         Self {
             pin_a,
             pin_b,
             decoder,
+            b_edge_counter,
+            _count_b: count_b,
+            _capture_on_a: capture_on_a,
+            capture_group,
+            capture_base_b: last_levels.1,
             last_levels,
         }
     }
 
+    fn arm_capture(&mut self) {
+        self.capture_group.disable_all();
+        self.b_edge_counter.stop();
+        self.b_edge_counter.clear();
+        self.b_edge_counter.cc(0).write(Self::CAPTURE_UNSET);
+        self.capture_base_b = Self::levels().1;
+        self.b_edge_counter.start();
+        self.capture_group.enable_all();
+    }
+
+    fn captured_edge_b(&self) -> Option<bool> {
+        let count = self.b_edge_counter.cc(0).read();
+        (count != Self::CAPTURE_UNSET).then_some(self.capture_base_b ^ (count & 1 != 0))
+    }
+
     async fn feed(&mut self, levels: (bool, bool)) {
         self.last_levels = levels;
-        if let Some(detent) = self.decoder.update(levels.0, levels.1) {
+        let detent = match self.captured_edge_b() {
+            Some(edge_b) => self
+                .decoder
+                .update_with_edge_b(levels.0, levels.1, Some(edge_b)),
+            None => self.decoder.update(levels.0, levels.1),
+        };
+        if let Some(detent) = detent {
             let direction = match detent {
                 Detent::Clockwise => Direction::Clockwise,
                 Detent::CounterClockwise => Direction::CounterClockwise,
@@ -160,6 +200,7 @@ impl Runnable for LeftRotaryEncoder {
         const SAMPLE_PERIOD_TICKS: u64 = 2;
 
         loop {
+            self.arm_capture();
             // Dedicated GPIOTE channels latch the first edge while the CPU is
             // asleep. Re-read after arming so an edge in the rearm window is
             // fed instead of being cleared and lost.
@@ -271,7 +312,26 @@ async fn main(spawner: Spawner) {
         Pull::Up,
         gpiote::InputChannelPolarity::Toggle,
     );
-    let mut encoder = LeftRotaryEncoder::new(encoder_a, encoder_b);
+    let b_edge_counter = timer::Timer::new_counter(p.TIMER1);
+    let mut capture_group = ppi::PpiGroup::new(p.PPI_GROUP0);
+    let count_b =
+        ppi::Ppi::new_one_to_one(p.PPI_CH0, encoder_b.event_in(), b_edge_counter.task_count());
+    let capture_on_a = ppi::Ppi::new_one_to_two(
+        p.PPI_CH1,
+        encoder_a.event_in(),
+        b_edge_counter.cc(0).task_capture(),
+        capture_group.task_disable_all(),
+    );
+    capture_group.add_channel(&count_b);
+    capture_group.add_channel(&capture_on_a);
+    let mut encoder = LeftRotaryEncoder::new(
+        encoder_a,
+        encoder_b,
+        b_edge_counter,
+        count_b,
+        capture_on_a,
+        capture_group,
+    );
     spawner.spawn(encoder_event_task().unwrap());
     let mut watchdog = Nrf52Watchdog::default_runner(p.WDT);
 

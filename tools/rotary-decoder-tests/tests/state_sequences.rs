@@ -40,18 +40,20 @@ fn transition(samples: &mut Vec<u8>, from: u8, to: u8, dwell: usize, bounce: boo
     repeat(samples, to, dwell);
 }
 
+fn is_latched(case: Case, position: i32, cw: bool) -> bool {
+    let next_position = position + if cw { 1 } else { -1 };
+    let parity = position.min(next_position).rem_euclid(2);
+    match case.capture {
+        Capture::LatchedEvenBoundary => parity == 0,
+        Capture::LatchedOddBoundary => parity == 1,
+        _ => false,
+    }
+}
+
 fn click_samples(case: Case, phase: usize, position: i32, cw: bool) -> Vec<u8> {
     let mut samples = Vec::new();
     let start = CW_STATES[phase];
-    let next_position = position + if cw { 1 } else { -1 };
-    // A boundary has the same identity when crossed in either direction.
-    let parity = position.min(next_position).rem_euclid(2);
-    let latched = match case.capture {
-        Capture::Visible => false,
-        Capture::LatchedEvenBoundary => parity == 0,
-        Capture::LatchedOddBoundary => parity == 1,
-        Capture::HiddenEverywhere => false,
-    };
+    let latched = is_latched(case, position, cw);
     if case.chatter {
         // B-only chatter, including a level held beyond debounce, must not
         // create clicks or change the answer for a later visible movement.
@@ -62,14 +64,9 @@ fn click_samples(case: Case, phase: usize, position: i32, cw: bool) -> Vec<u8> {
     }
     let middle = CW_STATES[(phase + if cw { 1 } else { 3 }) % 4];
     let end = CW_STATES[(phase + 2) % 4];
-    if matches!(case.capture, Capture::HiddenEverywhere) {
+    if matches!(case.capture, Capture::HiddenEverywhere) || latched {
         // Counterexample only: both edges occurred before acquisition ran.
         transition(&mut samples, start, end, STABLE, case.bounce);
-    } else if latched {
-        // The periodic sample would miss the middle state. The dedicated
-        // edge wake captures it before periodic settling samples resume.
-        transition(&mut samples, start, middle, 1, case.bounce);
-        transition(&mut samples, middle, end, STABLE, case.bounce);
     } else {
         transition(&mut samples, start, middle, case.edge_gap, case.bounce);
         transition(&mut samples, middle, end, STABLE, case.bounce);
@@ -82,6 +79,23 @@ fn feed(decoder: &mut ClockedDetentDecoder, samples: &[u8]) -> Vec<Detent> {
     samples
         .iter()
         .filter_map(|state| decoder.update(state & 2 != 0, state & 1 != 0))
+        .collect()
+}
+
+fn feed_with_edge_b(
+    decoder: &mut ClockedDetentDecoder,
+    samples: &[u8],
+    start_a: bool,
+    edge_b: Option<bool>,
+) -> Vec<Detent> {
+    let mut edge_b = edge_b;
+    samples
+        .iter()
+        .filter_map(|state| {
+            let a = state & 2 != 0;
+            let captured = (a != start_a).then(|| edge_b.take()).flatten();
+            decoder.update_with_edge_b(a, state & 1 != 0, captured)
+        })
         .collect()
 }
 
@@ -110,7 +124,9 @@ fn run_case(case: Case, directions: &[bool], results: &mut Results) {
             Detent::CounterClockwise
         };
         let samples = click_samples(case, phase, position, cw);
-        let actual = feed(&mut decoder, &samples);
+        let middle = CW_STATES[(phase + if cw { 1 } else { 3 }) % 4];
+        let edge_b = is_latched(case, position, cw).then_some(middle & 1 != 0);
+        let actual = feed_with_edge_b(&mut decoder, &samples, CW_STATES[phase] & 2 != 0, edge_b);
         results.clicks += 1;
         if actual != [expected] {
             failed = true;

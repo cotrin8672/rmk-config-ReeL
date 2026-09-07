@@ -17,9 +17,9 @@ For each capture mode, enumerate 20,480 six-click scenarios (122,880 clicks):
 - Five rest durations: 0, 15, 16, 17, 200 samples.
 - Contact bounce on/off and B-only rest chatter on/off.
 
-Capture modes: all intermediate states visible, or a dedicated edge latch
-preserving an intermediate state missed by periodic sampling on even or odd
-physical boundaries. Boundary identity uses
+Capture modes: all intermediate states visible, or hardware capture of B at
+the first A edge when the intermediate state is missed by periodic sampling on
+even or odd physical boundaries. Boundary identity uses
 the smaller of departure/arrival knob positions, so reversal crosses the same
 boundary. Across those modes: 61,440 scenarios / 368,640 clicks.
 
@@ -66,10 +66,16 @@ The collapsed-edge contracts exposed an acquisition/API limitation: they
 cannot all pass with the existing `update(a, b)` observations alone. A successful
 fix needs evidence captured before that loss, and acquisition-level tests using
 that evidence, not an expected-direction hint fabricated from the test oracle.
-The firmware now uses dedicated GPIOTE channels for P1.14/P1.15, checks the
-coherent P1 level immediately after arming them to close the rearm race, and
-uses one P1 `IN` load for every A/B sample. It feeds only observed states into
-the existing decoder; it does not infer phase order from timestamps.
+The first acquisition fix (`90b8b83`) used dedicated GPIOTE wake channels and
+coherent P1 reads. Physical testing found no change: both direction-bearing
+edges can still finish before the task reads either state.
+
+The replacement uses GPIOTE/PPI while the CPU sleeps. B edges increment a
+hardware counter. The first A edge captures that count and disables both PPI
+channels. The B level at that exact A edge is the armed B level XOR the captured
+edge-count parity. The decoder uses this direction evidence for that A-clocked
+click while retaining the existing Gray movement and A-only fallback behavior.
+Contact bounce adds edge pairs, so it does not alter the reconstructed level.
 
 ## Run
 
@@ -138,9 +144,9 @@ position-parity state was found that would itself explain alternating detents.
   A-only click while waiting indefinitely for B.
 
 The host suite now covers coherent edge wakes, the rearm race, torn reads,
-phase/history combinations, bounce and rest chatter. GPIOTE is a latch rather
-than a FIFO, so an unmeasured case where both direction-bearing edges complete
-before task service remains outside the host proof.
+phase/history combinations, bounce and rest chatter. The state matrix directly
+collapses both direction-bearing edges before task service and supplies only the
+B level captured at the A edge. It no longer fabricates an intermediate sample.
 
 These source-level counterexamples establish concrete vulnerabilities, not
 which one dominates this physical unit. Prior logs contain aggregate counts,
