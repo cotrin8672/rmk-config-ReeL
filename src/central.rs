@@ -250,6 +250,50 @@ async fn main(spawner: Spawner) {
         .default_profile
         .with_mode(Some(MorseMode::HoldOnOtherPress))
         .with_hold_timeout_ms(Some(220));
+    // Fork match_any is OR, so require Ctrl then Shift in a chain.
+    // User 30/31 are internal routing actions, consumed before HID output.
+    // Keep held modifiers even on the negative branch (ordinary scrolling).
+    let ctrl = rmk::types::modifier::ModifierCombination::LCTRL
+        | rmk::types::modifier::ModifierCombination::RCTRL;
+    let shift = rmk::types::modifier::ModifierCombination::LSHIFT
+        | rmk::types::modifier::ModifierCombination::RSHIFT;
+    for (wheel, intermediate, volume) in [
+        (rmk::k!(MouseWheelUp), rmk::user!(30), rmk::k!(KbVolumeUp)),
+        (
+            rmk::k!(MouseWheelDown),
+            rmk::user!(31),
+            rmk::k!(KbVolumeDown),
+        ),
+    ] {
+        for fork in [
+            Fork::new(
+                wheel,
+                wheel,
+                intermediate,
+                StateBits {
+                    modifiers: ctrl,
+                    ..StateBits::default()
+                },
+                StateBits::default(),
+                ctrl | shift,
+                true,
+            ),
+            Fork::new(
+                intermediate,
+                wheel,
+                volume,
+                StateBits {
+                    modifiers: shift,
+                    ..StateBits::default()
+                },
+                StateBits::default(),
+                ctrl | shift,
+                true,
+            ),
+        ] {
+            behavior_config.fork.forks.push(fork).unwrap();
+        }
+    }
     let windows_modifier = StateBits {
         modifiers: rmk::types::modifier::ModifierCombination::LGUI,
         ..StateBits::default()
