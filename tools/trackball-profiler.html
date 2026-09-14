@@ -527,6 +527,22 @@
       transform: translateX(-50%);
     }
 
+    .amount-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin: 16px 0;
+    }
+
+    .amount-item { min-width: 0; text-align: center; }
+    .amount-item strong { display: block; margin: 8px 0; font-size: 18px; }
+    .amount-item small { color: var(--muted); font-size: 11px; }
+    .amount-bar { height: 5px; border-radius: 4px; background: var(--line); overflow: hidden; }
+    .amount-bar span { display: block; height: 100%; background: var(--coral); }
+    .amount-note { color: var(--muted); font-size: 12px; line-height: 1.6; }
+    .technical-results > summary { cursor: pointer; padding: 12px 0; font-size: 12px; }
+    #resultResetButton { width: auto; }
+    #results > .card-head .card-title { white-space: nowrap; }
     .stage-message strong {
       color: var(--ink);
     }
@@ -1536,16 +1552,6 @@
             <div id="directionList" class="direction-list" aria-label="計測進捗"></div>
           </section>
 
-          <section>
-            <div class="section-label">
-              <span>感度</span>
-            </div>
-            <div class="range-row">
-              <input id="sensitivity" type="range" min="50" max="150" step="1" value="100">
-              <output id="sensitivityValue" class="range-value">1.00×</output>
-            </div>
-          </section>
-
           <button id="resetButton" class="ghost" type="button">計測をリセット</button>
 
           <section class="advanced-settings" aria-label="変換行列設定">
@@ -1561,7 +1567,7 @@
             </div>
             <div class="device-actions">
               <button id="readMatrix" class="ghost" type="button" disabled>再読込</button>
-              <button id="applyMatrix" class="apply-matrix" type="button" disabled>適用</button>
+              <button id="applyMatrix" class="apply-matrix" type="button" disabled>角度のみ保存</button>
             </div>
             <button id="traceToggle" class="trace-toggle" type="button" aria-pressed="false">入力表示 OFF</button>
           </section>
@@ -1578,8 +1584,8 @@
       <div class="result-grid">
         <div class="diagnostic">
           <div class="section-label">
-            <span>方向の齟齬</span>
-            <span>中心からの向き</span>
+            <span>方向・移動量</span>
+            <span>最大ストローク</span>
           </div>
           <div class="plot">
             <svg id="resultPlot" viewBox="-180 -180 360 360" role="img"
@@ -1611,6 +1617,18 @@
             <span id="confidence" class="confidence">GOOD FIT</span>
           </div>
 
+          <section class="output-block" aria-label="方向別の移動量補正">
+            <div class="output-head">
+              <h3>移動量補正</h3>
+              <button class="copy" type="button" data-copy="calibration">設定をコピー</button>
+            </div>
+            <div id="amountGrid" class="amount-grid"></div>
+            <p id="amountStatus" class="amount-note" role="status"></p>
+            <p class="amount-note">移動量補正はプレビューのみ。実機への反映にはファームウェア対応が必要です。</p>
+          </section>
+
+          <details class="technical-results">
+          <summary>角度補正の詳細</summary>
           <section class="output-block">
             <div class="output-head">
               <div>
@@ -1649,6 +1667,8 @@
             </div>
             <pre id="codeOutput"></pre>
           </section>
+          <button id="saveResultMatrix" class="apply-matrix" type="button" disabled>角度のみ実機に保存</button>
+          </details>
         </div>
       </div>
 
@@ -1657,15 +1677,16 @@
           <div>
             <p class="eyebrow">Live feel preview</p>
             <h2>操作感を、その場で試す。</h2>
-            <p>
-              自動反映をオフにすると仮想カーソルで補正前後を比較できます。
-              RMKへ反映した後は、実際のカーソルで新しい操作感を確かめてください。
-            </p>
           </div>
           <div class="preview-shortcuts">SPACE: 補正前 / 補正後<br>C: 中央へ戻す　ESC: 終了</div>
         </div>
         <div class="preview-layout">
           <div class="preview-controls">
+            <div class="section-label"><label for="sensitivity">感度</label></div>
+            <div class="range-row">
+              <input id="sensitivity" type="range" min="50" max="150" step="1" value="100">
+              <output id="sensitivityValue" class="range-value">1.00×</output>
+            </div>
             <div class="section-label">
               <span>A / B 比較</span>
               <span>Space</span>
@@ -1680,8 +1701,7 @@
             </div>
             <button id="recenterButton" class="ghost" type="button">カーソルを中央へ</button>
             <p class="preview-hint">
-              円の中でクリックすると次のターゲットへ進みます。
-              上下左右・斜めを往復して、狙った方向へ迷わず動くか確認できます。
+              ターゲットをクリックして次へ。
             </p>
           </div>
           <div id="previewPad" class="preview-pad" aria-label="補正行列の操作感プレビュー">
@@ -1749,10 +1769,13 @@
     let sumX = 0;
     let sumY = 0;
     let pathLength = 0;
-    let idleTimer = 0;
     let fittedBase = null;
     let resultSamples = [];
     let previousRoundFit = null;
+    let previousAmountFit = null;
+    let amountCalibration = null;
+    let captureHeld = false;
+    let measurementFirmware = null;
     let stableRoundCount = 0;
     let gestureAttempts = 0;
     let stoppedAtLimit = false;
@@ -1773,7 +1796,6 @@
     let profileCpiSaveRevision = 0;
     let profileCpiSavedRevision = 0;
     let profileCpiWriteInFlight = false;
-    let autoApplyTimer = 0;
     let lastReplacement = null;
     let resultApplied = false;
 
@@ -1784,6 +1806,9 @@
     const TARGET_RMS_DEGREES = 6;
     const MAX_FIT_DRIFT_DEGREES = 1.5;
     const REQUIRED_STABLE_ROUNDS = 2;
+    const MIN_AMOUNT_ROUNDS = 5;
+    const MAX_AMOUNT_SPREAD = 0.20;
+    const MAX_AMOUNT_DRIFT = 0.08;
 
     const REEL_VENDOR_ID = 0x4c4b;
     const REEL_PRODUCT_ID = 0x524d;
@@ -1823,6 +1848,7 @@
       const connected = Boolean(hidDevice?.opened) && state !== "idle";
       readMatrixButton.disabled = !connected;
       applyMatrixButton.disabled = !connected || resultApplied;
+      document.getElementById("saveResultMatrix").disabled = !connected || !fittedBase || resultApplied || stoppedAtLimit;
       profileCpiProfile.disabled = !connected;
       profileCpiSlider.disabled = !connected;
       connectDeviceButton.textContent = connected ? "切断" : "ワイヤレス接続";
@@ -2033,7 +2059,7 @@
       return matrix;
     }
 
-    async function writeCalibrationToDevice(matrix, automatic = false) {
+    async function writeCalibrationToDevice(matrix) {
       const offset = calibrationMacroOffset ?? await discoverCalibrationOffset();
       const blob = encodeCalibrationBlob(matrix);
       const packet = new Uint8Array(32);
@@ -2047,13 +2073,17 @@
       resultApplied = Boolean(lastReplacement);
       applyMatrixButton.disabled = resultApplied;
       sensitivity.disabled = resultApplied;
-      deviceDetail.textContent = automatic
-        ? "計測結果を自動保存しました。約25ms以内に新しい操作感へ切り替わります。"
-        : "行列をFlashへ保存しました。約25ms以内に新しい操作感へ切り替わります。";
-      showToast(automatic ? "RMKへ自動反映しました" : "RMKへ保存・反映しました");
+      document.getElementById("saveResultMatrix").disabled = resultApplied;
+      deviceDetail.textContent = "角度補正を送信しました。移動量補正はプレビューのみです。";
+      showToast("角度補正を送信しました");
       if (resultApplied) {
         document.getElementById("resultSummary").textContent =
-          "この結果はRMKへ保存済みです。続けて調整する場合は再計測してください";
+          "角度補正を送信しました。試用を続けるには再計測してください";
+        previewActive = false;
+        if (document.pointerLockElement === previewPad) document.exitPointerLock();
+        previewStart.hidden = false;
+        previewStart.disabled = true;
+        previewStart.textContent = "再計測して試用";
       }
     }
 
@@ -2120,20 +2150,6 @@
           profileCpiSaveTimer = window.setTimeout(flushProfileCpiSave, 100);
         }
       }
-    }
-
-    function scheduleAutoApply(matrix) {
-      lastReplacement = matrix;
-      if (!hidDevice?.opened || resultApplied) return;
-      window.clearTimeout(autoApplyTimer);
-      autoApplyTimer = window.setTimeout(async () => {
-        try {
-          await writeCalibrationToDevice(matrix, true);
-        } catch (error) {
-          setDeviceState("error", "RMK 書込失敗", error.message);
-          showToast(error.message);
-        }
-      }, 900);
     }
 
     function hasViaCollection(device) {
@@ -2255,6 +2271,12 @@
     async function requestCapture() {
       if (!active) {
         resetSession(false);
+        try {
+          measurementFirmware = currentFirmwareMatrix();
+        } catch (error) {
+          setPrompt("現在の行列に数値を入力してください");
+          return;
+        }
         active = true;
         currentIndex = 0;
       }
@@ -2267,21 +2289,17 @@
         await stage.requestPointerLock({ unadjustedMovement: true });
         captureMode.textContent = "Pointer Lock / raw input";
       } catch (error) {
-        try {
-          await stage.requestPointerLock();
-          captureMode.textContent = "Pointer Lock / 標準入力";
-        } catch (fallbackError) {
-          active = false;
-          startButton.hidden = false;
-          startButton.textContent = "もう一度試す";
-          stage.classList.add("stage-idle");
-          setPrompt("Pointer Lock エラー");
-        }
+        active = false;
+        startButton.hidden = false;
+        startButton.textContent = "もう一度試す";
+        stage.classList.add("stage-idle");
+        setPrompt("移動量の計測には加速なしの入力が必要です");
+        showToast("加速なしのPointer Lockを利用できません");
       }
     }
 
     function prepareDirection(roundSummary = "") {
-      clearTimeout(idleTimer);
+      captureHeld = false;
       sumX = 0;
       sumY = 0;
       pathLength = 0;
@@ -2290,13 +2308,13 @@
       const direction = directions[currentIndex % directions.length];
       directionArrow.textContent = direction.symbol;
       phase = "waiting";
-      setPrompt(roundSummary);
+      setPrompt(`${roundSummary ? `${roundSummary}<br>` : ""}指をいつもの位置へ。<br>Spaceを押したまま、持ち替えずに無理なく最大まで`);
       renderDirectionList();
     }
 
     function handleMovement(event) {
       if (!active || document.pointerLockElement !== stage) return;
-      if (phase !== "waiting" && phase !== "measuring") return;
+      if (!captureHeld || phase !== "measuring") return;
 
       const dx = Number(event.movementX) || 0;
       const dy = Number(event.movementY) || 0;
@@ -2309,8 +2327,6 @@
       setObservedVector(sumX, sumY);
       setPrompt("計測中");
 
-      clearTimeout(idleTimer);
-      idleTimer = window.setTimeout(finishGesture, 380);
     }
 
     function finishGesture() {
@@ -2319,7 +2335,7 @@
       const straightness = distance / Math.max(pathLength, distance);
       gestureAttempts += 1;
 
-      if (distance < 40) {
+      if (!Number.isFinite(distance) || distance < 2) {
         phase = "waiting";
         sumX = 0;
         sumY = 0;
@@ -2329,7 +2345,7 @@
           completeSession(null, "試行上限");
           return;
         }
-        setPrompt("もう一度");
+        setPrompt("移動を確認できませんでした。指を戻して、Spaceで再計測");
         return;
       }
 
@@ -2343,7 +2359,7 @@
           completeSession(null, "試行上限");
           return;
         }
-        setPrompt("まっすぐ、もう一度");
+        setPrompt("指を戻して、矢印の方向へもう一度 · Spaceで計測");
         return;
       }
 
@@ -2395,7 +2411,7 @@
           return;
         }
 
-        roundSummary = `${completedRound}/${MAX_ROUNDS}周 · RMS ${assessment.rms.toFixed(1)}°`;
+        roundSummary = assessment.amount.stable ? "確認中" : "同じ開始位置から、もう一周";
       }
       prepareDirection(roundSummary);
     }
@@ -2407,7 +2423,7 @@
       stoppedAtLimit = Boolean(limitReason);
       sensitivity.disabled = false;
       applyMatrixButton.disabled = !hidDevice?.opened;
-      clearTimeout(idleTimer);
+      captureHeld = false;
       directionArrow.textContent = "✓";
       renderDirectionList();
       if (document.pointerLockElement === stage) document.exitPointerLock();
@@ -2416,6 +2432,7 @@
         const finalAssessment = assessment || fitReliableCorrection(samples);
         fittedBase = finalAssessment.matrix;
         resultSamples = finalAssessment.inliers;
+        amountCalibration = fitDirectionalAmounts(resultSamples, fittedBase);
         setPrompt(limitReason || "完了");
         renderResults();
         results.classList.add("visible");
@@ -2441,23 +2458,30 @@
       lastReplacement = null;
       resultSamples = [];
       previousRoundFit = null;
+      previousAmountFit = null;
+      amountCalibration = null;
+      captureHeld = false;
+      measurementFirmware = null;
       stableRoundCount = 0;
       gestureAttempts = 0;
       stoppedAtLimit = false;
       sensitivity.disabled = false;
       applyMatrixButton.disabled = !hidDevice?.opened;
-      window.clearTimeout(autoApplyTimer);
       samples = [];
       currentIndex = 0;
       sumX = 0;
       sumY = 0;
       pathLength = 0;
       fittedBase = null;
-      clearTimeout(idleTimer);
       if (document.pointerLockElement === stage) document.exitPointerLock();
       if (document.pointerLockElement === previewPad) document.exitPointerLock();
       previewActive = false;
       previewStart.hidden = false;
+      previewStart.disabled = false;
+      hitCount = 0;
+      targetHits.textContent = "0";
+      previewTargetIndex = 0;
+      setPreviewMode("corrected");
       previewStart.textContent = "操作感プレビューを開始";
 
       directionArrow.textContent = "→";
@@ -2481,7 +2505,7 @@
     }
 
     function previewGain() {
-      if (previewMode === "raw" || !fittedBase || resultApplied) return 1;
+      if (!fittedBase || resultApplied) return 1;
       return Number(sensitivity.value) / 100;
     }
 
@@ -2518,24 +2542,21 @@
       rawModeButton.classList.toggle("selected", !corrected);
       correctedModeButton.classList.toggle("selected", corrected);
       previewPad.classList.toggle("raw", !corrected);
-      previewLiveMode.textContent = corrected ? "補正後" : "補正前";
+      previewLiveMode.textContent = corrected
+        ? (amountCalibration?.stable ? "角度＋移動量" : "角度のみ") : "補正前";
     }
 
     async function requestPreviewCapture() {
-      if (!fittedBase) return;
+      if (!fittedBase || resultApplied) return;
       previewActive = true;
       previewStart.hidden = true;
       try {
         await previewPad.requestPointerLock({ unadjustedMovement: true });
       } catch (error) {
-        try {
-          await previewPad.requestPointerLock();
-        } catch (fallbackError) {
-          previewActive = false;
-          previewStart.hidden = false;
-          previewStart.textContent = "もう一度試す";
-          showToast("Pointer Lockを開始できませんでした");
-        }
+        previewActive = false;
+        previewStart.hidden = false;
+        previewStart.textContent = "もう一度試す";
+        showToast("加速なしのPointer Lockを利用できません");
       }
     }
 
@@ -2545,8 +2566,10 @@
       const dy = Number(event.movementY) || 0;
       if (dx === 0 && dy === 0) return;
 
-      const transformed = applyLengthPreservingMatrix(previewCorrection(), dx, dy)
-        .map(value => value * previewGain());
+      const directed = applyLengthPreservingMatrix(previewCorrection(), dx, dy);
+      const transformed = (previewMode === "corrected" && amountCalibration?.stable
+        ? applyDirectionalAmount(directed[0], directed[1], amountCalibration.gains)
+        : directed).map(value => value * previewGain());
       const bounds = previewPad.getBoundingClientRect();
       const margin = 11;
       previewX = Math.max(margin, Math.min(bounds.width - margin, previewX + transformed[0]));
@@ -2693,6 +2716,39 @@
       return { inliers, errors, threshold };
     }
 
+    function fitDirectionalAmounts(inputSamples, matrix) {
+      const groups = directions.map((direction, index) => inputSamples
+        .filter(sample => sample.directionIndex === index)
+        .map(sample => {
+          const [x, y] = applyLengthPreservingMatrix(matrix, sample.dx, sample.dy);
+          return x * direction.x + y * direction.y;
+        }).filter(value => Number.isFinite(value) && value > 0));
+      const distances = groups.map(median);
+      const valid = distances.every(value => Number.isFinite(value) && value > 0);
+      const target = valid ? Math.exp(distances.reduce((sum, value) => sum + Math.log(value), 0) / 4) : 0;
+      const gains = valid ? distances.map(value => target / value) : [1, 1, 1, 1];
+      const spreads = groups.map((values, index) => values.length
+        ? 1.4826 * median(values.map(value => Math.abs(value - distances[index]))) / distances[index]
+        : Infinity);
+      // Compare early and late strokes too: a stable median can hide tracking drift.
+      const drift = groups.map((values, index) => values.length >= MIN_AMOUNT_ROUNDS
+        ? Math.abs(median(values.slice(0, 3)) - median(values.slice(-3))) / distances[index]
+        : Infinity);
+      const stable = valid && groups.every(values => values.length >= MIN_AMOUNT_ROUNDS)
+        && spreads.every(value => value <= MAX_AMOUNT_SPREAD)
+        && drift.every(value => value <= MAX_AMOUNT_SPREAD)
+        && gains.every(value => value >= 0.5 && value <= 2);
+      return { distances, gains, spreads, drift, target, stable };
+    }
+
+    function applyDirectionalAmount(x, y, gains) {
+      const squaredLength = x * x + y * y;
+      if (squaredLength === 0) return [0, 0];
+      // Squared direction weights meet smoothly at cardinal axes; preserve heading.
+      const gain = (x * x * gains[x >= 0 ? 0 : 1] + y * y * gains[y >= 0 ? 2 : 3]) / squaredLength;
+      return [x * gain, y * gain];
+    }
+
     function fitReliableCorrection(inputSamples) {
       if (inputSamples.length < directions.length) throw new Error("Not enough samples");
 
@@ -2756,13 +2812,19 @@
       const enoughInliers = completedRounds >= MIN_ROUNDS
         && directionCounts.every(count => count >= MIN_INLIERS_PER_DIRECTION);
       const precise = assessment.rms <= TARGET_RMS_DEGREES;
-      const stable = drift <= MAX_FIT_DRIFT_DEGREES;
+      const amount = fitDirectionalAmounts(assessment.inliers, assessment.matrix);
+      const amountDrift = previousAmountFit
+        ? Math.max(...amount.distances.map((value, index) => Math.abs(value / previousAmountFit[index] - 1)))
+        : Infinity;
+      const stable = drift <= MAX_FIT_DRIFT_DEGREES && amount.stable && amountDrift <= MAX_AMOUNT_DRIFT;
 
       stableRoundCount = enoughInliers && precise && stable ? stableRoundCount + 1 : 0;
       previousRoundFit = assessment.matrix.map(row => row.slice());
+      previousAmountFit = amount.distances.slice();
 
       return {
         ...assessment,
+        amount,
         completedRounds,
         directionCounts,
         drift,
@@ -2898,9 +2960,13 @@ self.output_y_remainder =
       const plot = document.getElementById("resultPlot");
       const radius = 132;
       const plottedSamples = resultSamples.length ? resultSamples : samples;
+      const distances = directions.map((direction, index) => median(plottedSamples
+        .filter(sample => sample.directionIndex === index).map(sample => Math.hypot(sample.dx, sample.dy))));
+      const plotScale = radius / Math.max(...distances.filter(Number.isFinite), amountCalibration?.target || 0, 1);
+      const targetRadius = (amountCalibration?.target || 0) * plotScale;
       const background = directions.map(direction => {
-        const x = direction.x * radius;
-        const y = direction.y * radius;
+        const x = direction.x * targetRadius;
+        const y = direction.y * targetRadius;
         return `<line x1="0" y1="0" x2="${x}" y2="${y}"
           stroke="rgba(21,45,56,.12)" stroke-width="1" stroke-dasharray="4 6"/>
           <circle cx="${x}" cy="${y}" r="3.5" fill="#152d38"/>`;
@@ -2917,14 +2983,14 @@ self.output_y_remainder =
         const averageLength = Math.hypot(average[0], average[1]) || 1;
         const observedX = average[0] / averageLength;
         const observedY = average[1] / averageLength;
-        const beforeX = observedX * radius;
-        const beforeY = observedY * radius;
-        const corrected = applyMatrix(correction, observedX, observedY);
-        const correctedLength = Math.hypot(corrected[0], corrected[1]) || 1;
-        const afterX = corrected[0] / correctedLength * radius;
-        const afterY = corrected[1] / correctedLength * radius;
-        const targetX = direction.x * radius;
-        const targetY = direction.y * radius;
+        const distance = Number.isFinite(distances[index]) ? distances[index] : 0;
+        const beforeX = observedX * distance * plotScale;
+        const beforeY = observedY * distance * plotScale;
+        const directed = applyLengthPreservingMatrix(correction, beforeX, beforeY);
+        const [afterX, afterY] = amountCalibration?.stable
+          ? applyDirectionalAmount(...directed, amountCalibration.gains) : directed;
+        const targetX = direction.x * (amountCalibration?.target || 0) * plotScale;
+        const targetY = direction.y * (amountCalibration?.target || 0) * plotScale;
         return `
           <line x1="0" y1="0" x2="${beforeX}" y2="${beforeY}"
             stroke="#ef6a53" stroke-width="2.2" stroke-linecap="round" opacity=".72"/>
@@ -2938,8 +3004,8 @@ self.output_y_remainder =
       }).join("");
 
       plot.innerHTML = `
-        <circle cx="0" cy="0" r="${radius}" fill="#f5f7f2" stroke="rgba(21,45,56,.15)"/>
-        <circle cx="0" cy="0" r="${radius * 0.5}" fill="none" stroke="rgba(21,45,56,.08)"/>
+        <circle cx="0" cy="0" r="${targetRadius}" fill="#f5f7f2" stroke="rgba(21,45,56,.15)"/>
+        <circle cx="0" cy="0" r="${targetRadius * 0.5}" fill="none" stroke="rgba(21,45,56,.08)"/>
         ${background}
         ${vectors}
         <circle cx="0" cy="0" r="5" fill="#152d38"/>
@@ -2947,7 +3013,7 @@ self.output_y_remainder =
     }
 
     function renderResults() {
-      if (!fittedBase || samples.length < directions.length) return;
+      if (!fittedBase || resultApplied || samples.length < directions.length) return;
 
       let firmware;
       try {
@@ -2957,9 +3023,8 @@ self.output_y_remainder =
         return;
       }
 
-      const gain = Number(sensitivity.value) / 100;
-      const correction = scaleMatrix(fittedBase, gain);
-      const replacement = multiplyMatrices(correction, firmware);
+      const correction = fittedBase;
+      const replacement = multiplyMatrices(correction, measurementFirmware || firmware);
       const identity = [[1, 0], [0, 1]];
       const evaluatedSamples = resultSamples.length ? resultSamples : samples;
       const before = rmsAngle(identity, evaluatedSamples);
@@ -2969,6 +3034,18 @@ self.output_y_remainder =
       renderMatrix("correctionMatrix", correction);
       renderMatrix("replacementMatrix", replacement);
       plotResults(correction);
+      setPreviewMode(previewMode);
+      const amount = amountCalibration;
+      const largest = Math.max(...amount.distances.filter(Number.isFinite), 1);
+      document.getElementById("amountGrid").innerHTML = directions.map((direction, index) => `
+        <div class="amount-item" aria-label="${direction.label}">
+          <span>${direction.symbol}</span>
+          <strong>${amount.stable ? `${amount.gains[index].toFixed(2)}×` : "—"}</strong>
+          <div class="amount-bar"><span style="width:${Number.isFinite(amount.distances[index]) ? amount.distances[index] / largest * 100 : 0}%"></span></div>
+          <small>${Number.isFinite(amount.distances[index]) ? Math.round(amount.distances[index]) : "—"} counts</small>
+        </div>`).join("");
+      document.getElementById("amountStatus").textContent = amount.stable
+        ? "" : "移動量のばらつき・差が大きいか、測定数が不足しています。開始位置・読み取りを確認して再計測してください。プレビューは角度補正のみです。";
 
       document.getElementById("beforeError").textContent = `${before.toFixed(1)}°`;
       document.getElementById("afterError").textContent = `${after.toFixed(1)}°`;
@@ -2976,14 +3053,14 @@ self.output_y_remainder =
 
       const confidence = document.getElementById("confidence");
       const resultSummary = document.getElementById("resultSummary");
-      if (stoppedAtLimit) {
+      if (stoppedAtLimit || !amount.stable) {
         confidence.textContent = "CHECK";
         confidence.style.background = "#c47b22";
-        resultSummary.textContent = "上限まで計測しました";
+        resultSummary.textContent = "再計測が必要です";
       } else if (after <= 4) {
         confidence.textContent = "HIGH FIT";
         confidence.style.background = "#007f7b";
-        resultSummary.textContent = "左右・上下が揃いました";
+        resultSummary.textContent = "方向と移動量を較正しました";
       } else if (after <= 8) {
         confidence.textContent = "GOOD FIT";
         confidence.style.background = "#4f7f3d";
@@ -3005,16 +3082,23 @@ self.output_y_remainder =
       document.getElementById("codeOutput").textContent = code;
       lastReplacement = replacement;
       applyMatrixButton.disabled = !hidDevice?.opened || resultApplied;
+      document.getElementById("saveResultMatrix").disabled = !hidDevice?.opened || resultApplied || stoppedAtLimit;
       copyPayloads = {
+        calibration: JSON.stringify({
+          version: 1,
+          input: "unadjusted-pointer-movement",
+          status: !stoppedAtLimit && amount.stable ? "ready" : "remeasure",
+          matrix: replacement,
+          directionalAmount: amount.stable && !stoppedAtLimit ? {
+            order: ["right", "left", "down", "up"], gains: amount.gains,
+            interpolation: "squared-direction-weights"
+          } : null,
+          previewSensitivity: Number(sensitivity.value) / 100
+        }, null, 2),
         correction: matrixText(correction),
         replacement: matrixText(replacement),
         code
       };
-      if (stoppedAtLimit) {
-        window.clearTimeout(autoApplyTimer);
-      } else {
-        scheduleAutoApply(replacement);
-      }
     }
 
     async function copyText(text) {
@@ -3065,8 +3149,20 @@ self.output_y_remainder =
         applyMatrixButton.disabled = !hidDevice?.opened || resultApplied;
       }
     });
+    document.getElementById("saveResultMatrix").addEventListener("click", async () => {
+      const button = document.getElementById("saveResultMatrix");
+      button.disabled = true;
+      try {
+        await writeCalibrationToDevice(lastReplacement);
+      } catch (error) {
+        showToast(error.message);
+      } finally {
+        button.disabled = !hidDevice?.opened || resultApplied || stoppedAtLimit;
+      }
+    });
     profileCpiProfile.addEventListener("change", renderProfileCpiControl);
     profileCpiSlider.addEventListener("input", () => {
+      if (active || fittedBase) resetSession(true);
       const profile = Number(profileCpiProfile.value);
       const cpi = Number(profileCpiSlider.value);
       profileCpiValues[profile] = cpi;
@@ -3116,7 +3212,7 @@ self.output_y_remainder =
       }
       if (active) {
         phase = "paused";
-        clearTimeout(idleTimer);
+        captureHeld = false;
         startButton.hidden = false;
         startButton.textContent = "計測を再開";
         stage.classList.add("stage-idle");
@@ -3130,7 +3226,9 @@ self.output_y_remainder =
     });
 
     ["f00", "f01", "f10", "f11"].forEach(id => {
-      document.getElementById(id).addEventListener("input", renderResults);
+      document.getElementById(id).addEventListener("input", () => {
+        if (active || fittedBase) resetSession(true);
+      });
     });
 
     document.querySelectorAll("[data-copy]").forEach(button => {
@@ -3141,6 +3239,14 @@ self.output_y_remainder =
     });
 
     window.addEventListener("keydown", event => {
+      if (active && document.pointerLockElement === stage && event.code === "Space") {
+        event.preventDefault();
+        if (event.repeat || captureHeld || phase !== "waiting") return;
+        captureHeld = true;
+        phase = "measuring";
+        setPrompt("最大まで動かしたら、Spaceを離す");
+        return;
+      }
       if (document.pointerLockElement === previewPad) {
         if (event.code === "Space") {
           event.preventDefault();
@@ -3154,6 +3260,15 @@ self.output_y_remainder =
         prepareDirection();
       }
     });
+    window.addEventListener("keyup", event => {
+      if (event.code !== "Space" || !captureHeld) return;
+      event.preventDefault();
+      captureHeld = false;
+      finishGesture();
+    });
+    window.addEventListener("blur", () => {
+      if (captureHeld) prepareDirection("中断しました");
+    });
 
     window.trackballProfilerTest = {
       fitCorrection,
@@ -3164,6 +3279,8 @@ self.output_y_remainder =
       classifyInliers,
       matrixDriftDegrees,
       applyLengthPreservingMatrix,
+      fitDirectionalAmounts,
+      applyDirectionalAmount,
       fnv1a,
       encodeCalibrationBlob,
       decodeCalibrationBlob,

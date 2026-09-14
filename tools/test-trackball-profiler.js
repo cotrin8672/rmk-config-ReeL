@@ -92,6 +92,52 @@ if (calibration.lengthError > 1e-9) {
   throw new Error(`length-preserving transform drifted: ${calibration.lengthError}`);
 }
 
+const testAmounts = new Function("directions", `${calibrationFunctions}
+  ${extractFunction("fitDirectionalAmounts")}
+  ${extractFunction("applyDirectionalAmount")}
+  const MIN_AMOUNT_ROUNDS = 5;
+  const MAX_AMOUNT_SPREAD = 0.20;
+  const identity = [[1, 0], [0, 1]];
+  const distances = [100, 100, 80, 120];
+  function strokes(factor) {
+    return Array.from({length: 6}, (_, round) => directions.map((d, i) => ({
+      dx: d.x * distances[i] * factor(round), dy: d.y * distances[i] * factor(round),
+      directionIndex: i, tx: d.x, ty: d.y
+    }))).flat();
+  }
+  const stable = fitDirectionalAmounts(strokes(() => 1), identity);
+  if (!stable.stable) throw new Error('repeatable strokes rejected');
+  directions.forEach((d, i) => {
+    const output = applyDirectionalAmount(d.x * distances[i], d.y * distances[i], stable.gains);
+    if (Math.abs(Math.hypot(...output) - stable.target) > 1e-9) throw new Error('cardinal amount mismatch');
+  });
+  if (Math.abs(stable.gains.reduce((a, b) => a * b, 1) - 1) > 1e-9) throw new Error('global gain drift');
+  const noisy = strokes(() => 1);
+  noisy[0].dx *= 4;
+  const robust = fitDirectionalAmounts(noisy, identity);
+  if (!robust.stable || robust.gains.some((v, i) => Math.abs(v - stable.gains[i]) > 1e-9)) {
+    throw new Error('single length outlier distorted calibration');
+  }
+  if (fitDirectionalAmounts(strokes(r => r < 3 ? 1 : 0.5), identity).stable) throw new Error('tracking drift accepted');
+  if (fitDirectionalAmounts(strokes(r => r % 2 ? 1.5 : 0.5), identity).stable) throw new Error('unstable strokes accepted');
+  if (fitDirectionalAmounts(noisy.slice(0, 4), identity).stable) throw new Error('too few samples accepted');
+  if (fitDirectionalAmounts([], identity).stable) throw new Error('empty samples accepted');
+  for (let degrees = -180; degrees < 180; degrees += 0.5) {
+    const a = degrees * Math.PI / 180;
+    const x = Math.cos(a), y = Math.sin(a);
+    const [u, v] = applyDirectionalAmount(x, y, stable.gains);
+    if (Math.abs(x * v - y * u) > 1e-9 || x * u + y * v <= 0) throw new Error('heading changed');
+  }
+  for (const x of [-1, 1]) {
+    const a = applyDirectionalAmount(x, -1e-7, stable.gains);
+    const b = applyDirectionalAmount(x, 1e-7, stable.gains);
+    if (Math.hypot(a[0] - b[0], a[1] - b[1]) > 1e-5) throw new Error('axis discontinuity');
+  }
+  if (applyDirectionalAmount(0, 0, stable.gains).some(v => v !== 0)) throw new Error('zero motion changed');
+  return stable.gains;
+`);
+const amountGains = testAmounts(directions);
+
 const cpiFunctions = [
   "fnv1a",
   "validateProfileCpi",
@@ -120,5 +166,6 @@ if (cpi.corrupted !== null) throw new Error("corrupted CPI blob was accepted");
 console.log(
   `trackball profiler OK: ${directions.length} directions, ` +
   `${calibration.assessment.excluded} outlier excluded, ` +
-  `RMS ${calibration.assessment.rms.toFixed(3)}°`
+  `RMS ${calibration.assessment.rms.toFixed(3)}°, ` +
+  `directional gains ${amountGains.map(v => v.toFixed(3)).join('/')}`
 );
