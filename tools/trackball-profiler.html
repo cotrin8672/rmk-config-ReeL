@@ -1624,7 +1624,8 @@
             </div>
             <div id="amountGrid" class="amount-grid"></div>
             <p id="amountStatus" class="amount-note" role="status"></p>
-            <p class="amount-note">移動量補正はプレビューのみ。実機への反映にはファームウェア対応が必要です。</p>
+            <p id="firmwareSupport" class="amount-note">実機への適用にはReeLに接続してください。</p>
+            <button id="saveResultMatrix" class="apply-matrix" type="button" disabled>実機に適用</button>
           </section>
 
           <details class="technical-results">
@@ -1667,7 +1668,6 @@
             </div>
             <pre id="codeOutput"></pre>
           </section>
-          <button id="saveResultMatrix" class="apply-matrix" type="button" disabled>角度のみ実機に保存</button>
           </details>
         </div>
       </div>
@@ -1776,6 +1776,7 @@
     let amountCalibration = null;
     let captureHeld = false;
     let measurementFirmware = null;
+    let deviceCalibration = { matrix: null, gains: [1, 1, 1, 1], sensitivity: 1, version: 1 };
     let stableRoundCount = 0;
     let gestureAttempts = 0;
     let stoppedAtLimit = false;
@@ -1848,7 +1849,10 @@
       const connected = Boolean(hidDevice?.opened) && state !== "idle";
       readMatrixButton.disabled = !connected;
       applyMatrixButton.disabled = !connected || resultApplied;
-      document.getElementById("saveResultMatrix").disabled = !connected || !fittedBase || resultApplied || stoppedAtLimit;
+      document.getElementById("saveResultMatrix").disabled = !connected || !amountCalibration?.stable || resultApplied || stoppedAtLimit || deviceCalibration.version !== 2;
+      document.getElementById("firmwareSupport").textContent = !connected
+        ? "実機への適用にはReeLに接続してください。"
+        : deviceCalibration.version !== 2 ? "移動量補正に対応したファームウェアへ更新してください。" : "";
       profileCpiProfile.disabled = !connected;
       profileCpiSlider.disabled = !connected;
       connectDeviceButton.textContent = connected ? "切断" : "ワイヤレス接続";
@@ -1909,14 +1913,25 @@
       return values;
     }
 
-    function encodeCalibrationBlob(matrix) {
+    function encodeCalibrationBlob(matrix, gains = [1, 1, 1, 1], sensitivity = 1, version = 2) {
       const fixed = matrixToFixed(matrix);
+      const amounts = gains.map(value => Math.round(value * 1000));
+      const percent = Math.round(sensitivity * 100);
+      if (amounts.length !== 4 || amounts.some(v => !Number.isInteger(v) || v < 500 || v > 2000)
+        || !Number.isInteger(percent) || percent < 50 || percent > 150 || ![1, 2].includes(version)) {
+        throw new Error("移動量補正が安全範囲を超えています");
+      }
       const bytes = new Uint8Array(CALIBRATION_BLOB_SIZE);
       bytes.set(CALIBRATION_MAGIC, 0);
-      bytes[4] = 1;
+      bytes[4] = version;
+      bytes[5] = version === 2 ? percent : 0;
       const view = new DataView(bytes.buffer);
       view.setUint16(6, CALIBRATION_SCALE, true);
-      fixed.forEach((value, index) => view.setInt32(8 + index * 4, value, true));
+      if (version === 1) fixed.forEach((value, index) => view.setInt32(8 + index * 4, value, true));
+      else {
+        fixed.forEach((value, index) => view.setInt16(8 + index * 2, value, true));
+        amounts.forEach((value, index) => view.setUint16(16 + index * 2, value, true));
+      }
       view.setUint32(24, fnv1a(bytes.subarray(0, 24)), true);
       return bytes;
     }
@@ -1924,18 +1939,22 @@
     function decodeCalibrationBlob(bytes) {
       if (bytes.length !== CALIBRATION_BLOB_SIZE) return null;
       if (!CALIBRATION_MAGIC.every((value, index) => bytes[index] === value)) return null;
-      if (bytes[4] !== 1 || bytes[5] !== 0) return null;
+      if (![1, 2].includes(bytes[4]) || (bytes[4] === 1 && bytes[5] !== 0)) return null;
       const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
       if (view.getUint16(6, true) !== CALIBRATION_SCALE) return null;
       if (view.getUint32(24, true) !== fnv1a(bytes.subarray(0, 24))) return null;
-      const values = Array.from({ length: 4 }, (_, index) => view.getInt32(8 + index * 4, true));
+      const values = Array.from({ length: 4 }, (_, index) => bytes[4] === 1
+        ? view.getInt32(8 + index * 4, true) : view.getInt16(8 + index * 2, true));
       const matrix = [
         [values[0] / CALIBRATION_SCALE, values[1] / CALIBRATION_SCALE],
         [values[2] / CALIBRATION_SCALE, values[3] / CALIBRATION_SCALE]
       ];
       try {
         matrixToFixed(matrix);
-        return matrix;
+        const gains = bytes[4] === 1 ? [1, 1, 1, 1] : Array.from({length: 4}, (_, i) => view.getUint16(16 + i * 2, true) / 1000);
+        const sensitivity = bytes[4] === 1 ? 1 : bytes[5] / 100;
+        encodeCalibrationBlob(matrix, gains, sensitivity, bytes[4]);
+        return { matrix, gains, sensitivity, version: bytes[4] };
       } catch (error) {
         return null;
       }
@@ -2050,18 +2069,29 @@
       packet[2] = offset & 0xff;
       packet[3] = CALIBRATION_BLOB_SIZE;
       const response = await sendViaPacket(packet);
-      const matrix = decodeCalibrationBlob(response.slice(4, 4 + CALIBRATION_BLOB_SIZE));
-      if (!matrix) throw new Error("保存済み調整値を検証できません");
-      setMatrixInputs(matrix);
+      const config = decodeCalibrationBlob(response.slice(4, 4 + CALIBRATION_BLOB_SIZE));
+      if (!config) throw new Error("保存済み調整値を検証できません");
+      deviceCalibration = config;
+      setMatrixInputs(config.matrix);
+      sensitivity.value = String(Math.round(config.sensitivity * 100));
+      sensitivityValue.textContent = config.sensitivity.toFixed(2) + "×";
       resetSession(true);
+      setDeviceState("connected", "RMK 接続済み");
       deviceDetail.textContent = `保存値を読込済み · macro offset ${offset}`;
       if (announce) showToast("RMKから調整値を読み込みました");
-      return matrix;
+      return config.matrix;
     }
 
     async function writeCalibrationToDevice(matrix) {
+      const combined = Boolean(lastReplacement);
+      if (combined && (deviceCalibration.version !== 2 || !amountCalibration?.stable || stoppedAtLimit)) {
+        throw new Error("対応ファームウェアと安定した較正結果が必要です");
+      }
       const offset = calibrationMacroOffset ?? await discoverCalibrationOffset();
-      const blob = encodeCalibrationBlob(matrix);
+      const blob = encodeCalibrationBlob(matrix,
+        combined ? amountCalibration.gains : deviceCalibration.gains,
+        combined ? Number(sensitivity.value) / 100 : deviceCalibration.sensitivity,
+        deviceCalibration.version);
       const packet = new Uint8Array(32);
       packet[0] = VIA_SET_MACRO_BUFFER;
       packet[1] = offset >> 8;
@@ -2074,11 +2104,12 @@
       applyMatrixButton.disabled = resultApplied;
       sensitivity.disabled = resultApplied;
       document.getElementById("saveResultMatrix").disabled = resultApplied;
-      deviceDetail.textContent = "角度補正を送信しました。移動量補正はプレビューのみです。";
-      showToast("角度補正を送信しました");
+      deviceCalibration = decodeCalibrationBlob(blob);
+      deviceDetail.textContent = "較正値を送信しました。実機での反映には約1秒かかります。";
+      showToast(combined ? "角度・移動量・感度を送信しました" : "角度補正を送信しました");
       if (resultApplied) {
         document.getElementById("resultSummary").textContent =
-          "角度補正を送信しました。試用を続けるには再計測してください";
+          "実機へ送信しました。再較正するときは再計測してください";
         previewActive = false;
         if (document.pointerLockElement === previewPad) document.exitPointerLock();
         previewStart.hidden = false;
@@ -2316,8 +2347,7 @@
       if (!active || document.pointerLockElement !== stage) return;
       if (!captureHeld || phase !== "measuring") return;
 
-      const dx = Number(event.movementX) || 0;
-      const dy = Number(event.movementY) || 0;
+      const [dx, dy] = removeDeviceAmount(Number(event.movementX) || 0, Number(event.movementY) || 0);
       if (dx === 0 && dy === 0) return;
 
       phase = "measuring";
@@ -2566,10 +2596,11 @@
       const dy = Number(event.movementY) || 0;
       if (dx === 0 && dy === 0) return;
 
-      const directed = applyLengthPreservingMatrix(previewCorrection(), dx, dy);
+      const input = previewMode === "corrected" ? removeDeviceAmount(dx, dy) : [dx, dy];
+      const directed = applyLengthPreservingMatrix(previewCorrection(), ...input);
       const transformed = (previewMode === "corrected" && amountCalibration?.stable
         ? applyDirectionalAmount(directed[0], directed[1], amountCalibration.gains)
-        : directed).map(value => value * previewGain());
+        : directed).map(value => value * (previewMode === "corrected" ? previewGain() : 1));
       const bounds = previewPad.getBoundingClientRect();
       const margin = 11;
       previewX = Math.max(margin, Math.min(bounds.width - margin, previewX + transformed[0]));
@@ -2747,6 +2778,13 @@
       // Squared direction weights meet smoothly at cardinal axes; preserve heading.
       const gain = (x * x * gains[x >= 0 ? 0 : 1] + y * y * gains[y >= 0 ? 2 : 3]) / squaredLength;
       return [x * gain, y * gain];
+    }
+
+    function removeDeviceAmount(x, y) {
+      if (x === 0 && y === 0) return [0, 0];
+      const scaled = applyDirectionalAmount(x, y, deviceCalibration.gains);
+      const gain = (Math.abs(x) >= Math.abs(y) ? scaled[0] / x : scaled[1] / y) * deviceCalibration.sensitivity;
+      return [x / gain, y / gain];
     }
 
     function fitReliableCorrection(inputSamples) {
@@ -3082,10 +3120,10 @@ self.output_y_remainder =
       document.getElementById("codeOutput").textContent = code;
       lastReplacement = replacement;
       applyMatrixButton.disabled = !hidDevice?.opened || resultApplied;
-      document.getElementById("saveResultMatrix").disabled = !hidDevice?.opened || resultApplied || stoppedAtLimit;
+      document.getElementById("saveResultMatrix").disabled = !hidDevice?.opened || resultApplied || stoppedAtLimit || !amount.stable || deviceCalibration.version !== 2;
       copyPayloads = {
         calibration: JSON.stringify({
-          version: 1,
+          version: 2,
           input: "unadjusted-pointer-movement",
           status: !stoppedAtLimit && amount.stable ? "ready" : "remeasure",
           matrix: replacement,
@@ -3093,7 +3131,7 @@ self.output_y_remainder =
             order: ["right", "left", "down", "up"], gains: amount.gains,
             interpolation: "squared-direction-weights"
           } : null,
-          previewSensitivity: Number(sensitivity.value) / 100
+          sensitivity: Number(sensitivity.value) / 100
         }, null, 2),
         correction: matrixText(correction),
         replacement: matrixText(replacement),
@@ -3157,7 +3195,7 @@ self.output_y_remainder =
       } catch (error) {
         showToast(error.message);
       } finally {
-        button.disabled = !hidDevice?.opened || resultApplied || stoppedAtLimit;
+        button.disabled = !hidDevice?.opened || resultApplied || stoppedAtLimit || !amountCalibration?.stable || deviceCalibration.version !== 2;
       }
     });
     profileCpiProfile.addEventListener("change", renderProfileCpiControl);

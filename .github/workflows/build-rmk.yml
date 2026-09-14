@@ -50,6 +50,13 @@ jobs:
       - name: Check trackball profiler JavaScript
         run: node tools/test-trackball-profiler.js
 
+      - name: Test calibration format and directional motion
+        run: |
+          rustc --edition 2024 --test src/calibration_data.rs -o /tmp/calibration-data-tests
+          /tmp/calibration-data-tests
+          rustc --edition 2024 --test src/motion_gain.rs -o /tmp/motion-gain-tests
+          /tmp/motion-gain-tests
+
       - name: Test rotary decoder waveforms
         run: >-
           cargo test

@@ -9,7 +9,7 @@ use rmk::event::{
 };
 use rmk::input_device::pointing::{InitState, PointingDriver};
 
-use crate::calibration_config::current_matrix;
+use crate::calibration_config::current_calibration;
 use crate::motion_chunk::take_proportional_i8_chunk;
 use crate::motion_gain::MotionGain;
 use crate::trackball_transform::TrackballTransform;
@@ -142,8 +142,11 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
         let raw_x = take_i16_chunk(&mut self.accumulated_x);
         let raw_y = take_i16_chunk(&mut self.accumulated_y);
 
-        let (x, y) = self.transform.apply(raw_x, raw_y, current_matrix());
-        let (x, y) = self.gain.apply(x, y);
+        let calibration = current_calibration();
+        let (x, y) = self.transform.apply(raw_x, raw_y, calibration.matrix);
+        let (x, y) = self
+            .gain
+            .apply_calibrated(x, y, calibration.gains, calibration.sensitivity);
         self.pending_report_x = self.pending_report_x.saturating_add(i32::from(x));
         self.pending_report_y = self.pending_report_y.saturating_add(i32::from(y));
     }
