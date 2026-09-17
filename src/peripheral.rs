@@ -219,8 +219,22 @@ impl Runnable for LeftRotaryEncoder {
                 if self.decoder.is_idle() {
                     break;
                 }
-                Timer::after_ticks(SAMPLE_PERIOD_TICKS).await;
-                self.feed(Self::levels()).await;
+                // Keep listening to BOTH phases during debounce as well as
+                // at rest. Timer-only reads observed only 00 -> 11 -> 00 ->
+                // 11 in the measured bounce, with no intermediate states.
+                // The timer still supplies samples when no edge arrives.
+                let levels = {
+                    let timer = Timer::after_ticks(SAMPLE_PERIOD_TICKS);
+                    let wait_a = self.pin_a.wait();
+                    let wait_b = self.pin_b.wait();
+                    let armed_levels = Self::levels();
+                    if armed_levels == self.last_levels {
+                        select(select(wait_a, wait_b), timer).await;
+                    }
+                    // Never infer edge order from which future won.
+                    Self::levels()
+                };
+                self.feed(levels).await;
             }
         }
     }

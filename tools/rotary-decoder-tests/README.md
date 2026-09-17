@@ -28,6 +28,20 @@ old wrong output. CI cannot demonstrate that the new reader sees a missing
 intermediate state. Use `-NewCapture -Mode Next` for a one-click comparison
 at the same bad position: it exports a capture whether the result is E/I/H/U.
 
+The second measured capture `rotary-20260917-153721-903.log` on f1d47ab
+still produced a reported down / PC-up reversal: 37 samples, observed states
+00 -> 11 -> 00 -> 11, all Gray deltas/E/I zero, output H=1. The interrupt
+executor alone therefore did not resolve the failure. Both actual captures
+are retained as replay fixtures, without inventing intermediate states.
+
+The reader now waits for either phase's GPIOTE event OR the two-tick timer
+throughout active debounce too, instead of using only the timer in that phase.
+After arming it rechecks the port; after waking it reads a single actual port
+snapshot and never uses the winning future to infer transition order. Events
+can still coalesce before service; this does not guarantee lossless capture.
+The 16-sample rule is unchanged, but additional B-event samples can shorten
+the elapsed A confirmation time. This timing effect needs device validation.
+
 ## Collect one bad-position trace (Windows)
 
 1. Flash `reel_left.uf2` to the left half. Keep the right half connected normally.

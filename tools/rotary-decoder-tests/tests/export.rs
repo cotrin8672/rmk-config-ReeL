@@ -35,6 +35,30 @@ fn measured_downward_click_replays_the_reported_wrong_history_output() {
     }
 }
 
+#[test]
+fn measured_interrupt_capture_still_has_no_gray_direction_evidence() {
+    // User again reported down -> PC up. Moving the reader to an interrupt
+    // executor alone did NOT resolve the observed loss of phase information.
+    let text = include_str!("fixtures/measured-irq-down-output-up.log");
+    let report = replay::validate(text).unwrap();
+    assert_eq!((report.count, report.dropped), (37, 0));
+    assert_eq!(report.final_source, "H");
+    assert_eq!(report.final_output, 1);
+    assert_eq!(report.clear_counts, [1, 0, 7]);
+    let mut states: Vec<(&str, &str)> = text
+        .lines()
+        .skip(2)
+        .take(37)
+        .map(|row| {
+            let fields: Vec<_> = row.split(',').collect();
+            assert_eq!((fields[22], fields[23], fields[24]), ("0", "0", "0"));
+            (fields[2], fields[3])
+        })
+        .collect();
+    states.dedup();
+    assert_eq!(states, [("0", "0"), ("1", "1"), ("0", "0"), ("1", "1")]);
+}
+
 fn log() -> String {
     let mut decoder = ClockedDetentDecoder::new(false, false);
     let mut trace = Trace::new();
