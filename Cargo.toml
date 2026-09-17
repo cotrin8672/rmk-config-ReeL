@@ -48,6 +48,7 @@ embassy-executor = { version = "0.10", features = [
 ] }
 embassy-embedded-hal = "0.6"
 embassy-sync = "0.8"
+embassy-usb = "0.6"
 embedded-hal-async = "1"
 embedded-storage-async = "0.4"
 embedded-graphics = "0.8"

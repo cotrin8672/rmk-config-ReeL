@@ -6,7 +6,9 @@ mod macros;
 mod lcd_dirty_lines;
 mod rotary_decoder;
 mod rotary_diagnostics;
+mod rotary_log;
 mod rotary_trace;
+mod rotary_usb;
 mod sharp_lcd;
 mod xiao_battery;
 
@@ -129,8 +131,18 @@ impl LeftRotaryEncoder {
     async fn feed(&mut self, levels: (bool, bool)) {
         let ticks = Instant::now().as_ticks();
         self.last_levels = levels;
+        let before = self.decoder.state();
         let output = self.decoder.update(levels.0, levels.1);
-        rotary_diagnostics::record(ticks, levels.0, levels.1, self.decoder.take_decision());
+        rotary_diagnostics::record(rotary_trace::Sample {
+            number: 0,
+            ticks,
+            a: levels.0,
+            b: levels.1,
+            before,
+            after: self.decoder.state(),
+            evidence: self.decoder.evidence(),
+            decision: self.decoder.take_decision(),
+        });
         if let Some(detent) = output {
             let direction = match detent {
                 Detent::Clockwise => Direction::Clockwise,
@@ -253,6 +265,12 @@ async fn main(spawner: Spawner) {
     let sdc = unwrap!(build_sdc(sdc_peripherals, &mut rng, mpsl, &mut sdc_memory));
     let mut host_resources = HostResources::new();
     let stack = build_ble_stack(sdc, ble_addr(), &mut host_resources).await;
+    let usb_driver = usb::Driver::new(
+        p.USBD,
+        Irqs,
+        usb::vbus_detect::HardwareVbusDetect::new(Irqs),
+    );
+    spawner.spawn(rotary_usb::usb_task(usb_driver).unwrap());
 
     let (row_pins, col_pins) = config_matrix_pins_nrf!(
         peripherals: p,

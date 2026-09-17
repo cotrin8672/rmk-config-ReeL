@@ -94,39 +94,111 @@ fn unknown_a_confirmation_is_recorded_before_evidence_is_cleared() {
     assert!(!d.old_a && d.new_a);
 }
 
+fn feed(
+    trace: &mut rotary_decoder_tests::rotary_trace::Trace,
+    decoder: &mut ClockedDetentDecoder,
+    ticks: u64,
+    a: bool,
+    b: bool,
+) {
+    let before = decoder.state();
+    decoder.update(a, b);
+    trace.push(rotary_decoder_tests::rotary_trace::Sample {
+        number: 0,
+        ticks,
+        a,
+        b,
+        before,
+        after: decoder.state(),
+        evidence: decoder.evidence(),
+        decision: decoder.take_decision(),
+    });
+}
 #[test]
-fn bounded_trace_keeps_repeated_samples_and_none_output_confirmations() {
-    use rotary_decoder_tests::rotary_trace::{DECISION_CAPACITY, SAMPLE_CAPACITY, Trace};
+fn capture_freezes_unknown_and_survives_later_input() {
+    use rotary_decoder_tests::rotary_trace::{CaptureState, Trace, Trigger};
     let mut decoder = ClockedDetentDecoder::new(false, false);
     let mut trace = Trace::new();
-    for n in 0..80 {
-        let state = n % 2 == 0;
-        for repeat in 0..DEBOUNCE_SAMPLES {
-            decoder.update(state, state);
-            trace.push(
-                n * 100 + u64::from(repeat),
-                state,
-                state,
-                decoder.take_decision(),
-            );
-        }
+    feed(&mut trace, &mut decoder, 0, false, false);
+    assert_eq!(trace.len(), 0);
+    trace.arm(Trigger::Ambiguous);
+    for n in 0..16 {
+        feed(&mut trace, &mut decoder, n, true, true);
     }
-    assert_eq!(trace.decision_count, 80);
-    assert_eq!(trace.sample_count, 80 * u64::from(DEBOUNCE_SAMPLES));
-    assert_eq!(trace.latest(0).unwrap().number, 80);
-    assert_eq!(trace.latest(31).unwrap().number, 49);
-    assert_eq!(trace.latest(32), None);
-    assert_eq!(trace.records.iter().flatten().count(), DECISION_CAPACITY);
-    assert_eq!(trace.samples.iter().flatten().count(), SAMPLE_CAPACITY);
-    assert!(
-        trace
-            .records
-            .iter()
-            .flatten()
-            .all(|r| r.decision.output.is_none())
-    );
+    assert_eq!(trace.state, CaptureState::Frozen);
+    let frozen = trace.sample(15).unwrap();
+    assert_eq!(frozen.decision.unwrap().source, DecisionSource::Unknown);
+    for n in 16..2000 {
+        feed(&mut trace, &mut decoder, n, false, false);
+    }
+    assert_eq!(trace.sample_count, 16);
+    assert_eq!(trace.sample(15), Some(frozen));
+    let before = decoder.state();
+    trace.arm(Trigger::NextConfirmation);
+    assert_eq!(decoder.state(), before);
+    assert_eq!(trace.len(), 0);
+    assert_eq!(trace.sample(0), None);
+    assert_eq!(trace.latest(0), None);
+}
+#[test]
+fn wrapped_prefix_has_complete_replay_state_and_clear_reasons() {
+    use rotary_decoder_tests::rotary_trace::{CaptureState, SAMPLE_CAPACITY, Trace, Trigger};
+    let mut decoder = ClockedDetentDecoder::new(false, false);
+    let mut trace = Trace::new();
+    trace.arm(Trigger::Ambiguous);
+    for n in 0..600 {
+        feed(&mut trace, &mut decoder, n, false, false);
+    }
+    // Valid CW followed by an ambiguous two-bit reversal: H must freeze.
+    for n in 600..616 {
+        feed(&mut trace, &mut decoder, n, true, false);
+    }
+    for n in 616..636 {
+        feed(&mut trace, &mut decoder, n, true, true);
+    }
+    for n in 636..652 {
+        feed(&mut trace, &mut decoder, n, false, false);
+    }
+    assert_eq!(trace.state, CaptureState::Frozen);
+    assert_eq!(trace.len(), SAMPLE_CAPACITY);
+    assert_eq!(trace.dropped(), 652 - SAMPLE_CAPACITY as u64);
     assert_eq!(
-        trace.samples.iter().flatten().map(|s| s.number).min(),
-        Some(trace.sample_count - SAMPLE_CAPACITY as u64 + 1)
+        trace
+            .sample(trace.len() - 1)
+            .unwrap()
+            .decision
+            .unwrap()
+            .source,
+        DecisionSource::History
+    );
+    let mut replay = ClockedDetentDecoder::from_state(trace.sample(0).unwrap().before);
+    for index in 0..trace.len() {
+        let sample = trace.sample(index).unwrap();
+        assert_eq!(sample.number, trace.dropped() + index as u64 + 1);
+        assert_eq!(sample.before, replay.state());
+        replay.update(sample.a, sample.b);
+        assert_eq!(sample.after, replay.state());
+        assert_eq!(sample.evidence, replay.evidence());
+        assert_eq!(sample.decision, replay.take_decision());
+    }
+    assert_eq!(trace.sample(trace.len()), None);
+}
+#[test]
+fn logs_show_accumulation_and_cancel_clear_before_reset() {
+    let mut decoder = ClockedDetentDecoder::new(false, false);
+    decoder.update(true, false);
+    assert_eq!(decoder.evidence().delta, 1);
+    assert_eq!(decoder.evidence().edge_before_clear, 1);
+    for _ in 0..16 {
+        decoder.update(false, false);
+    }
+    assert_eq!(decoder.evidence().clears & 2, 2);
+    assert_eq!(decoder.evidence().edge_before_clear, 0);
+    assert_eq!(
+        (
+            decoder.state().edge_movement,
+            decoder.state().interval_movement
+        ),
+        (0, 0)
     );
 }

@@ -1,66 +1,69 @@
-# Rotary decision diagnostic firmware
+# Frozen rotary capture
 
-The failed signed-A GPIOTE/PPI experiment (`1dc23cf`) is reverted. This build
-uses the `cb06d32` acquisition and decoder unchanged in their decision rules:
-single P1 snapshot, dedicated GPIOTE waits, 2-tick sampling delay, 16 identical
-A samples, and E -> I -> previous-direction fallback. Latest main is retained.
-This is a diagnostic build, not a claim that the reversal defect is fixed.
+This is a diagnostic build, not a fix for the reversal defect. It preserves
+cb06d32 decoder decisions (E, then I, then history), GPIO acquisition and
+16-sample A confirmation. The failed PPI experiment remains reverted.
 
-## Use the left LCD
+## Collect one bad-position trace (Windows)
 
-Only the left firmware needs updating for this diagnostic. The left LCD shows
-the newest A confirmation at the top and the preceding one below it. Rotate to
-reproduce the already known bad reversal and stop; photograph the display and
-note the intended physical direction. Do the same at the known good position.
-Do not infer the intended direction from the reported CW/CCW output.
+1. Flash `reel_left.uf2` to the left half. Keep the right half connected normally.
+2. Connect the left half to the PC with a USB data cable. Leave bootloader mode.
+3. Run `./tools/rotary-decoder-tests/collect.ps1` in PowerShell.
+4. After the collection prompt, alternate up/down at the known bad position.
+   Stop when the LCD says FROZEN and the script reports a saved file.
+5. Send the `.log` from `Downloads/ReeL-rotary-logs`, plus the physical direction
+   of the last movement and what the PC did. No hand transcription is needed.
 
-Each record shows:
+The default trigger freezes at the first A confirmation that uses H (history)
+or U (unknown), including an unknown confirmation that produces no event.
+This matches the reported E=I=0 condition; H alone does not prove the physical
+movement was wrong. It does not wait for four movements or test speed.
 
-- `#N`: A confirmation number, including confirmations returning no event.
-- `E>CW`, `I>CCW`, `H>CW`, or `U>-`: selected evidence and actual output.
-  E = current A window, I = whole interval, H = previous direction,
-  U = unknown. `-` means None, not a missing record.
-- `t...ms`: time at entry to the confirming update() call.
-- `A0>1 AB11`: old/new accepted A and the exact A/B passed to update().
-- `E:...`, `I:...`, `H:...`: both pre-clear sums and pre-update history.
+If automatic port detection fails, specify `-Port COM7` using the actual port.
+A completed trace stays frozen despite further rotation or USB reconnection
+while the board stays powered. Rerunning the command retrieves that same trace.
+Only `-NewCapture` explicitly replaces it. Reset/power loss loses RAM data.
+To obtain a comparison later, use `-NewCapture -Mode Next` at the good position;
+this freezes at the next A confirmation regardless of source.
 
-Both positive and negative signs keep the old direction mapping. E/I/H are
-copied before clearing the sums or replacing the previous direction. No extra
-GPIO reads are made for diagnostics. LCD formatting/flushing is outside the
-acquisition loop, polled every 100 ms so None outputs are visible too. Rapid
-rotation may skip displayed records; the LCD is not a complete event log.
+## Evidence and limitations
 
-## RAM record and limits
+The 512-entry rolling capture retains every actual update() call, including
+repeated samples, software timestamp (32768 Hz), A/B, full decoder state before
+and after, Gray delta, E/I before clearing, clear reason, selected source and
+output. The first retained complete before-state anchors replay even when
+older samples were overwritten; BEGIN explicitly reports that overwritten count.
+A replay cannot recover physical edges missed between software samples or the
+history before this retained prefix. These are not hardware edge timestamps.
 
-`rotary_diagnostics::TRACE` holds the latest 32 confirmations and the latest
-1024 update() samples. Each sample keeps a sequential number, an Embassy tick
-timestamp (32768 Hz), and the actual A/B values. Repeated identical samples
-are retained, not collapsed into edges. Confirmation records reference the
-sample number and timestamp. This is a rolling buffer: old slots are overwritten,
-never silently presented as a complete trace. Full counters and timestamps are
-in RAM; LCD counter/time fields are modulo 100,000,000 for width.
+`b_`/`a_` columns mean before/after state, not GPIO channels. State fields are
+stable/candidate A, A run length, prior AB, idle sample count, tracking flag,
+E, I and H. The `clears` bitmask is 1=A confirmation, 2=cancelled A window,
+4=idle expiry. Directions are 1=CW, -1=CCW, 0=None; sources E/I/H/U and `-`
+(no confirmation). No GPIO reads are added by diagnostics.
 
-A debugger can inspect the RAM while halted. Samples require debugger access;
-the LCD alone is intended for the first E/I/H diagnosis. A retained suffix whose
-prefix has been overwritten is not enough to reproduce the decoder's prior
-state. Do not replay that suffix as a fresh decoder and call it a device replay.
-These are software sample times, not independently captured electrical edges.
-The first diagnostic stage does not claim to observe all physical transitions.
+Acquisition never waits on USB or formats text. Capture adds CPU/RAM work and
+USB adds interrupts, so identical wall-clock sampling is not guaranteed.
+USB enumeration, transfer and behavior must still be tested on the device.
+The trackball and split event protocol are not changed.
 
-The recorder never awaits or formats strings. Recording and display still add
-CPU work and can affect scheduling; preserving the original sampling code does
-not prove that wall-clock timing is identical. No trace data is written to flash.
-No split protocol, direction queue, press/release timing, or trackball setting is
-changed by the diagnostic commit.
+## File integrity and replay
 
-## Checks
+USB CDC commands are INFO, ARM (H/U trigger), NEXT (any confirmation), DUMP.
+ASCII LF framing: `BEGIN,1,generation,count,dropped,32768`, CSV header and rows,
+then `END,count,fnv1a32`. The checksum covers the header and rows including LF.
+The collector checks checksum, count and sequence before saving a completed
+file; interrupted data is retained as `.partial`. It installs no drivers.
 
-The frozen `cb06d32` decoder in `tests/support/reference_decoder.rs` is compared
-against the instrumented decoder for every output and idle state across four
-initial A/B states and 20,000 generated sample runs per state, including repeated
-samples and skipped states. The tests exercise E/I/H and separately verify U,
-pre-clear evidence, one-shot records, and buffer wrap with None outputs.
+Run the host replay with the host target appropriate to your computer:
 
-The existing two ignored collapsed-input contracts remain unresolved and ignored.
-Passing the host suite or GHA establishes build/logic checks only. Actual bad
-and good detent records are needed before changing the decoder or acquisition.
+```powershell
+cargo run --manifest-path tools/rotary-decoder-tests/Cargo.toml --target x86_64-pc-windows-msvc --locked --bin replay -- path/to/rotary.log
+```
+
+Replay checks every state, delta, clear and output against the firmware decoder.
+Host tests compare instrumented decisions with the frozen cb06d32 reference,
+exercise wrap/freeze/rearm and export/replay, and reject corrupt/truncated logs.
+GHA also validates a generated fixture with the PowerShell collector. The two
+ignored collapsed-input contracts remain unresolved; host/CI success does not
+establish physical improvement or USB functionality.

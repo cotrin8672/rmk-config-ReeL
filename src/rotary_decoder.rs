@@ -90,6 +90,29 @@ const fn encode(a_high: bool, b_high: bool) -> u8 {
     ((a_high as u8) << 1) | (b_high as u8)
 }
 
+/// Complete decision state before/after an update, sufficient for exact replay.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct DecoderState {
+    pub stable_a: bool,
+    pub candidate_a: bool,
+    pub run_a: u8,
+    pub previous_state: u8,
+    pub unchanged_samples: u8,
+    pub tracking_a_edge: bool,
+    pub edge_movement: i32,
+    pub interval_movement: i32,
+    pub last_direction: Option<Detent>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct UpdateEvidence {
+    pub delta: i8,
+    pub edge_before_clear: i32,
+    pub interval_before_clear: i32,
+    /// Bit 0: A confirmed; bit 1: A candidate cancelled; bit 2: idle expiry.
+    pub clears: u8,
+}
+
 pub struct ClockedDetentDecoder {
     stable_a: bool,
     candidate_a: bool,
@@ -101,6 +124,7 @@ pub struct ClockedDetentDecoder {
     interval_movement: i32,
     last_direction: Option<Detent>,
     decision: Option<Decision>,
+    evidence: UpdateEvidence,
 }
 
 impl ClockedDetentDecoder {
@@ -116,6 +140,12 @@ impl ClockedDetentDecoder {
             interval_movement: 0,
             last_direction: None,
             decision: None,
+            evidence: UpdateEvidence {
+                delta: 0,
+                edge_before_clear: 0,
+                interval_before_clear: 0,
+                clears: 0,
+            },
         }
     }
 
@@ -128,11 +158,45 @@ impl ClockedDetentDecoder {
         self.decision.take()
     }
 
+    pub fn state(&self) -> DecoderState {
+        DecoderState {
+            stable_a: self.stable_a,
+            candidate_a: self.candidate_a,
+            run_a: self.run_a,
+            previous_state: self.previous_state,
+            unchanged_samples: self.unchanged_samples,
+            tracking_a_edge: self.tracking_a_edge,
+            edge_movement: self.edge_movement,
+            interval_movement: self.interval_movement,
+            last_direction: self.last_direction,
+        }
+    }
+
+    /// Used by the host replayer, never to alter live firmware decisions.
+    #[allow(dead_code)]
+    pub fn from_state(s: DecoderState) -> Self {
+        let mut result = Self::new(s.stable_a, s.previous_state & 1 != 0);
+        result.candidate_a = s.candidate_a;
+        result.run_a = s.run_a;
+        result.previous_state = s.previous_state;
+        result.unchanged_samples = s.unchanged_samples;
+        result.tracking_a_edge = s.tracking_a_edge;
+        result.edge_movement = s.edge_movement;
+        result.interval_movement = s.interval_movement;
+        result.last_direction = s.last_direction;
+        result
+    }
+
+    pub fn evidence(&self) -> UpdateEvidence {
+        self.evidence
+    }
+
     /// Feed one raw sample. A debounced A transition emits one detent; its
     /// direction comes from signed Gray movement accumulated across the
     /// whole click interval rather than B at any selected instant.
     pub fn update(&mut self, a_high: bool, b_high: bool) -> Option<Detent> {
         self.decision = None;
+        self.evidence = UpdateEvidence::default();
         let state = encode(a_high, b_high);
         if state == self.previous_state {
             self.unchanged_samples = self.unchanged_samples.saturating_add(1);
@@ -152,6 +216,9 @@ impl ClockedDetentDecoder {
         } else if self.tracking_a_edge {
             self.edge_movement += i32::from(delta);
         }
+        self.evidence.delta = delta;
+        self.evidence.edge_before_clear = self.edge_movement;
+        self.evidence.interval_before_clear = self.interval_movement;
 
         if a_high == self.candidate_a {
             self.run_a = self.run_a.saturating_add(1);
@@ -196,6 +263,7 @@ impl ClockedDetentDecoder {
                 },
                 output: direction,
             });
+            self.evidence.clears |= 1;
             self.tracking_a_edge = false;
             self.edge_movement = 0;
             self.interval_movement = 0;
@@ -213,6 +281,7 @@ impl ClockedDetentDecoder {
             && self.run_a >= DEBOUNCE_SAMPLES
             && self.candidate_a == self.stable_a
         {
+            self.evidence.clears |= 2;
             self.tracking_a_edge = false;
             self.edge_movement = 0;
             self.interval_movement = 0;
@@ -222,6 +291,7 @@ impl ClockedDetentDecoder {
         // interval. Once the contacts settle, that evidence belongs to the
         // old click and must not survive into a later reversal.
         if self.unchanged_samples >= EVIDENCE_IDLE_SAMPLES {
+            self.evidence.clears |= 4;
             self.interval_movement = 0;
         }
         None

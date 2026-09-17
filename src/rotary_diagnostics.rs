@@ -1,7 +1,7 @@
 //! Left LCD diagnostic view. No display I/O or formatting in the capture loop.
 use crate::{
-    rotary_decoder::{Decision, DecisionSource, Detent},
-    rotary_trace::{Record, Trace},
+    rotary_decoder::{DecisionSource, Detent},
+    rotary_trace::{CaptureState, Record, Sample, Trace, Trigger},
 };
 use core::{
     cell::RefCell,
@@ -18,8 +18,20 @@ use rmk::display::{DisplayRenderer, RenderContext};
 
 // Kept in static RAM; a debugger can inspect samples/records and their counters.
 static TRACE: Mutex<ThreadModeRawMutex, RefCell<Trace>> = Mutex::new(RefCell::new(Trace::new()));
-pub fn record(ticks: u64, a: bool, b: bool, decision: Option<Decision>) {
-    TRACE.lock(|trace| trace.borrow_mut().push(ticks, a, b, decision));
+pub fn record(sample: Sample) {
+    TRACE.lock(|trace| trace.borrow_mut().push(sample));
+}
+pub fn arm(trigger: Trigger) {
+    TRACE.lock(|trace| trace.borrow_mut().arm(trigger));
+}
+pub fn status() -> (CaptureState, u32, usize, u64) {
+    TRACE.lock(|trace| {
+        let trace = trace.borrow();
+        (trace.state, trace.generation, trace.len(), trace.dropped())
+    })
+}
+pub fn sample(index: usize) -> Option<Sample> {
+    TRACE.lock(|trace| trace.borrow().sample(index))
 }
 
 fn direction(value: Option<Detent>) -> &'static str {
@@ -104,7 +116,7 @@ fn draw_record<D: DrawTarget<Color = BinaryColor>>(display: &mut D, y: i32, reco
 }
 
 pub struct DiagnosticRenderer {
-    last_number: Option<u64>,
+    last_number: Option<(u32, u64, CaptureState)>,
 }
 impl DiagnosticRenderer {
     pub const fn new() -> Self {
@@ -117,16 +129,31 @@ impl DisplayRenderer<BinaryColor> for DiagnosticRenderer {
         _ctx: &RenderContext,
         display: &mut D,
     ) {
-        let (number, newest, previous) = TRACE.lock(|trace| {
+        let (key, newest, previous) = TRACE.lock(|trace| {
             let trace = trace.borrow();
-            (trace.decision_count, trace.latest(0), trace.latest(1))
+            (
+                (trace.generation, trace.decision_count, trace.state),
+                trace.latest(0),
+                trace.latest(1),
+            )
         });
-        if self.last_number == Some(number) {
+        if self.last_number == Some(key) {
             return;
         }
-        self.last_number = Some(number);
+        self.last_number = Some(key);
         let _ = display.clear(BinaryColor::Off);
-        line(display, 0, format_args!("ROTARY DIAG"));
+        line(
+            display,
+            0,
+            format_args!(
+                "{}",
+                match key.2 {
+                    CaptureState::Disarmed => "USB: RUN TOOL",
+                    CaptureState::Armed => "ARMED",
+                    CaptureState::Frozen => "FROZEN",
+                }
+            ),
+        );
         if let Some(record) = newest {
             draw_record(display, 12, record);
         } else {
@@ -135,6 +162,6 @@ impl DisplayRenderer<BinaryColor> for DiagnosticRenderer {
         if let Some(record) = previous {
             draw_record(display, 80, record);
         }
-        line(display, 150, format_args!("RAM last 32"));
+        line(display, 150, format_args!("USB LOG"));
     }
 }

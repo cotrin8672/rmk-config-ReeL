@@ -58,11 +58,17 @@ jobs:
           /tmp/motion-gain-tests
 
       - name: Test rotary decoder waveforms
+        env:
+          ROTARY_TEST_LOG: ${{ runner.temp }}/reel-rotary-test.log
         run: >-
           cargo test
           --manifest-path tools/rotary-decoder-tests/Cargo.toml
           --target x86_64-unknown-linux-gnu
           --locked
+
+      - name: Validate rotary log collector
+        shell: pwsh
+        run: ./tools/rotary-decoder-tests/collect.ps1 -ValidateFile "$env:RUNNER_TEMP/reel-rotary-test.log"
 
       - name: Install firmware conversion tools
         run: cargo install cargo-binutils cargo-hex-to-uf2 --locked
