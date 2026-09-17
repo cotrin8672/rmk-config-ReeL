@@ -14,18 +14,21 @@ mod xiao_battery;
 
 use defmt::{info, unwrap};
 use defmt_rtt as _;
-use embassy_executor::Spawner;
+use embassy_executor::{InterruptExecutor, Spawner};
 use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
+use embassy_nrf::interrupt::{self, InterruptExt, Priority};
 use embassy_nrf::mode::Async;
 use embassy_nrf::peripherals::{RNG, SPI3, USBD};
 use embassy_nrf::saadc::Input as _;
 use embassy_nrf::{bind_interrupts, gpiote, rng, saadc, spim, usb};
+use embassy_sync::blocking_mutex::raw::CriticalSectionRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Instant, Timer};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
 use panic_probe as _;
+use rmk::HostResources;
 use rmk::ble::build_ble_stack;
 use rmk::config::StorageConfig;
 use rmk::core_traits::Runnable;
@@ -39,7 +42,6 @@ use rmk::run_all;
 use rmk::split::peripheral::run_rmk_split_peripheral;
 use rmk::storage::new_storage_for_split_peripheral;
 use rmk::watchdog::Nrf52Watchdog;
-use rmk::{HostResources, RawMutex};
 use static_cell::StaticCell;
 
 use rotary_decoder::{ClockedDetentDecoder, Detent};
@@ -154,8 +156,30 @@ impl LeftRotaryEncoder {
 }
 
 const ENCODER_EVENT_QUEUE_SIZE: usize = 64;
-static ENCODER_DIRECTION_CHANNEL: Channel<RawMutex, Direction, ENCODER_EVENT_QUEUE_SIZE> =
-    Channel::new();
+static ENCODER_DIRECTION_CHANNEL: Channel<
+    CriticalSectionRawMutex,
+    Direction,
+    ENCODER_EVENT_QUEUE_SIZE,
+> = Channel::new();
+
+// Only acquisition/decoding runs here. LCD, USB and RMK event publishing stay
+// in thread mode. GPIOTE waking a thread-mode task does not capture pin levels:
+// both edges can pass before that task gets polled (observed 00 -> 11 trace).
+static ENCODER_EXECUTOR: InterruptExecutor = InterruptExecutor::new();
+
+#[cortex_m_rt::interrupt]
+unsafe fn EGU1_SWI1() {
+    // start() initializes the executor before enabling this reserved IRQ.
+    unsafe { ENCODER_EXECUTOR.on_interrupt() };
+}
+
+#[embassy_executor::task]
+async fn encoder_capture_task(
+    mut encoder: LeftRotaryEncoder,
+    _egu: embassy_nrf::Peri<'static, embassy_nrf::peripherals::EGU1>,
+) -> ! {
+    encoder.run().await
+}
 
 #[embassy_executor::task]
 async fn encoder_event_task() -> ! {
@@ -300,14 +324,18 @@ async fn main(spawner: Spawner) {
         Pull::Up,
         gpiote::InputChannelPolarity::Toggle,
     );
-    let mut encoder = LeftRotaryEncoder::new(encoder_a, encoder_b);
+    let encoder = LeftRotaryEncoder::new(encoder_a, encoder_b);
+    // Below the high-priority radio/GPIOTE handlers, above thread-mode work.
+    // MPSL owns EGU0_SWI0, not EGU1_SWI1. Do not alter its IRQ priorities.
+    interrupt::EGU1_SWI1.set_priority(Priority::P3);
+    let encoder_spawner = ENCODER_EXECUTOR.start(interrupt::EGU1_SWI1);
+    encoder_spawner.spawn(encoder_capture_task(encoder, p.EGU1).unwrap());
     spawner.spawn(encoder_event_task().unwrap());
     let mut watchdog = Nrf52Watchdog::default_runner(p.WDT);
 
     join(
         run_all!(
             matrix,
-            encoder,
             storage,
             watchdog,
             battery_monitor,

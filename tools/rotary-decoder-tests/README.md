@@ -1,8 +1,32 @@
 # Frozen rotary capture
 
-This is a diagnostic build, not a fix for the reversal defect. It preserves
+This build changes acquisition scheduling and retains the frozen diagnostics.
+Physical improvement has not yet been established. It preserves
 cb06d32 decoder decisions (E, then I, then history), GPIO acquisition and
 16-sample A confirmation. The failed PPI experiment remains reverted.
+
+## Acquisition change after the measured reversal
+
+The supplied `rotary-20260917-152447-224.log` (firmware 493c176) reproduces
+the reported wheel-down / PC-up event: prior AB=00, then 16 samples of 11,
+E=I=0 and H=-1. No cancellation/idle clear happened before confirmation.
+The 15 measured sample gaps are 9-10 RTC ticks (275-305 us), although the
+timer delay is only 2 ticks. The first edge's latency is NOT measured.
+
+Previously the reader was inside RMK's thread-mode run_all with LCD/matrix
+work. GPIOTE latches an event flag, then wakes that executor; it does not save
+the pin state at the edge. The reader now has its own interrupt executor on
+EGU1_SWI1 at P3. It can read pins without waiting for thread-mode rendering
+or USB formatting. MPSL keeps EGU0 and all its existing priorities/resources.
+Only the direction channel and diagnostic RAM locks become interrupt-safe;
+RMK publishing remains in thread mode. No decoder/fallback rule is changed.
+
+This removes one software scheduling delay, not every possible loss: IRQ
+masking, higher-priority work and the active sampling interval can still hide
+closely spaced edges. The measured fixture intentionally still replays the
+old wrong output. CI cannot demonstrate that the new reader sees a missing
+intermediate state. Use `-NewCapture -Mode Next` for a one-click comparison
+at the same bad position: it exports a capture whether the result is E/I/H/U.
 
 ## Collect one bad-position trace (Windows)
 

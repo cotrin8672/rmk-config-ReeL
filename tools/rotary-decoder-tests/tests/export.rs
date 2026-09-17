@@ -5,6 +5,36 @@ use rotary_decoder_tests::{
     rotary_trace::{Sample, Trace, Trigger},
 };
 use std::fmt::Write;
+
+#[test]
+fn measured_downward_click_replays_the_reported_wrong_history_output() {
+    // Device capture 2026-09-17, firmware 493c176. User: wheel down, PC up.
+    // Preserve this failure as evidence; do not fabricate a middle state to
+    // turn replay green. The acquisition change needs a NEW device capture.
+    let text = include_str!("fixtures/measured-down-output-up.log");
+    let report = replay::validate(text).unwrap();
+    assert_eq!(report.count, 16);
+    assert_eq!(report.dropped, 0);
+    assert_eq!(report.final_source, "H");
+    assert_eq!(report.final_output, -1);
+    assert_eq!(report.clear_counts, [1, 0, 0]);
+    let rows: Vec<Vec<&str>> = text
+        .lines()
+        .skip(2)
+        .take(16)
+        .map(|row| row.split(',').collect())
+        .collect();
+    assert_eq!(rows[0][7], "0"); // Before first update: AB=00.
+    for row in &rows {
+        assert_eq!((row[2], row[3]), ("1", "1"));
+        assert_eq!((row[22], row[23], row[24]), ("0", "0", "0"));
+    }
+    for pair in rows.windows(2) {
+        let elapsed = pair[1][1].parse::<u64>().unwrap() - pair[0][1].parse::<u64>().unwrap();
+        assert!((9..=10).contains(&elapsed)); // 275-305 us, not 2 ticks.
+    }
+}
+
 fn log() -> String {
     let mut decoder = ClockedDetentDecoder::new(false, false);
     let mut trace = Trace::new();

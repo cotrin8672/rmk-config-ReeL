@@ -7,7 +7,7 @@ use core::{
     cell::RefCell,
     fmt::{self, Write},
 };
-use embassy_sync::blocking_mutex::{Mutex, raw::ThreadModeRawMutex};
+use embassy_sync::blocking_mutex::{Mutex, raw::CriticalSectionRawMutex};
 use embedded_graphics::{
     mono_font::{MonoTextStyle, ascii::FONT_5X7},
     pixelcolor::BinaryColor,
@@ -17,7 +17,8 @@ use embedded_graphics::{
 use rmk::display::{DisplayRenderer, RenderContext};
 
 // Kept in static RAM; a debugger can inspect samples/records and their counters.
-static TRACE: Mutex<ThreadModeRawMutex, RefCell<Trace>> = Mutex::new(RefCell::new(Trace::new()));
+static TRACE: Mutex<CriticalSectionRawMutex, RefCell<Trace>> =
+    Mutex::new(RefCell::new(Trace::new()));
 pub fn record(sample: Sample) {
     TRACE.lock(|trace| trace.borrow_mut().push(sample));
 }

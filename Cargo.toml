@@ -45,6 +45,7 @@ embassy-executor = { version = "0.10", features = [
     "defmt",
     "platform-cortex-m",
     "executor-thread",
+    "executor-interrupt",
 ] }
 embassy-embedded-hal = "0.6"
 embassy-sync = "0.8"
