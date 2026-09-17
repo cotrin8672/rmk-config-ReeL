@@ -46,6 +46,28 @@ pub enum Detent {
     CounterClockwise,
 }
 
+/// Evidence selected at an A confirmation, including an unknown direction.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DecisionSource {
+    Edge,
+    Interval,
+    History,
+    Unknown,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Decision {
+    pub old_a: bool,
+    pub new_a: bool,
+    pub observed_a: bool,
+    pub observed_b: bool,
+    pub edge_movement: i32,
+    pub interval_movement: i32,
+    pub previous_direction: Option<Detent>,
+    pub source: DecisionSource,
+    pub output: Option<Detent>,
+}
+
 /// Consecutive identical A samples required before a click is accepted.
 /// At the ~61 us sample period this is about 1 ms.
 pub const DEBOUNCE_SAMPLES: u8 = 16;
@@ -78,6 +100,7 @@ pub struct ClockedDetentDecoder {
     edge_movement: i32,
     interval_movement: i32,
     last_direction: Option<Detent>,
+    decision: Option<Decision>,
 }
 
 impl ClockedDetentDecoder {
@@ -92,6 +115,7 @@ impl ClockedDetentDecoder {
             edge_movement: 0,
             interval_movement: 0,
             last_direction: None,
+            decision: None,
         }
     }
 
@@ -100,10 +124,15 @@ impl ClockedDetentDecoder {
         self.unchanged_samples >= EVIDENCE_IDLE_SAMPLES && !self.tracking_a_edge
     }
 
+    pub fn take_decision(&mut self) -> Option<Decision> {
+        self.decision.take()
+    }
+
     /// Feed one raw sample. A debounced A transition emits one detent; its
     /// direction comes from signed Gray movement accumulated across the
     /// whole click interval rather than B at any selected instant.
     pub fn update(&mut self, a_high: bool, b_high: bool) -> Option<Detent> {
+        self.decision = None;
         let state = encode(a_high, b_high);
         if state == self.previous_state {
             self.unchanged_samples = self.unchanged_samples.saturating_add(1);
@@ -132,6 +161,7 @@ impl ClockedDetentDecoder {
         }
 
         if self.run_a >= DEBOUNCE_SAMPLES && self.candidate_a != self.stable_a {
+            let old_a = self.stable_a;
             self.stable_a = self.candidate_a;
             let movement = if self.edge_movement != 0 {
                 self.edge_movement
@@ -145,6 +175,27 @@ impl ClockedDetentDecoder {
             } else {
                 self.last_direction
             };
+            // Copy evidence BEFORE clearing either window or changing history.
+            // This observes the existing decision; it does not choose direction.
+            self.decision = Some(Decision {
+                old_a,
+                new_a: self.stable_a,
+                observed_a: a_high,
+                observed_b: b_high,
+                edge_movement: self.edge_movement,
+                interval_movement: self.interval_movement,
+                previous_direction: self.last_direction,
+                source: if self.edge_movement != 0 {
+                    DecisionSource::Edge
+                } else if self.interval_movement != 0 {
+                    DecisionSource::Interval
+                } else if self.last_direction.is_some() {
+                    DecisionSource::History
+                } else {
+                    DecisionSource::Unknown
+                },
+                output: direction,
+            });
             self.tracking_a_edge = false;
             self.edge_movement = 0;
             self.interval_movement = 0;

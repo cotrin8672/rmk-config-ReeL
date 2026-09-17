@@ -5,6 +5,8 @@
 mod macros;
 mod lcd_dirty_lines;
 mod rotary_decoder;
+mod rotary_diagnostics;
+mod rotary_trace;
 mod sharp_lcd;
 mod xiao_battery;
 
@@ -17,7 +19,7 @@ use embassy_nrf::peripherals::{RNG, SPI3, USBD};
 use embassy_nrf::saadc::Input as _;
 use embassy_nrf::{bind_interrupts, gpiote, rng, saadc, spim, usb};
 use embassy_sync::channel::Channel;
-use embassy_time::Timer;
+use embassy_time::{Duration, Instant, Timer};
 use nrf_mpsl::Flash;
 use nrf_sdc::mpsl::MultiprotocolServiceLayer;
 use nrf_sdc::{self as sdc, mpsl};
@@ -39,7 +41,7 @@ use rmk::{HostResources, RawMutex};
 use static_cell::StaticCell;
 
 use rotary_decoder::{ClockedDetentDecoder, Detent};
-use sharp_lcd::new_status_lcd;
+use sharp_lcd::new_lcd_with_renderer;
 use xiao_battery::{
     DIVIDER_MEASURED, DIVIDER_TOTAL, PeripheralBatterySnapshot, XiaoBatteryMonitor,
     XiaoChargingStateReader,
@@ -125,8 +127,11 @@ impl LeftRotaryEncoder {
     }
 
     async fn feed(&mut self, levels: (bool, bool)) {
+        let ticks = Instant::now().as_ticks();
         self.last_levels = levels;
-        if let Some(detent) = self.decoder.update(levels.0, levels.1) {
+        let output = self.decoder.update(levels.0, levels.1);
+        rotary_diagnostics::record(ticks, levels.0, levels.1, self.decoder.take_decision());
+        if let Some(detent) = output {
             let direction = match detent {
                 Detent::Clockwise => Direction::Clockwise,
                 Detent::CounterClockwise => Direction::CounterClockwise,
@@ -203,7 +208,13 @@ async fn main(spawner: Spawner) {
     lcd_spi_config.bit_order = spim::BitOrder::LsbFirst;
     let lcd_spi = spim::Spim::new_txonly(p.SPI3, Irqs, p.P1_00, p.P0_16, lcd_spi_config);
     let lcd_cs = Output::new(p.P1_10, Level::Low, OutputDrive::Standard);
-    let (mut lcd, mut lcd_vcom) = new_status_lcd(lcd_spi, lcd_cs, false);
+    let (lcd, mut lcd_vcom) = new_lcd_with_renderer(
+        lcd_spi,
+        lcd_cs,
+        rotary_diagnostics::DiagnosticRenderer::new(),
+    );
+    // Poll independently so an A confirmation with output=None is visible too.
+    let mut lcd = lcd.with_render_interval(Duration::from_millis(100));
 
     let mut battery_monitor =
         XiaoBatteryMonitor::new(p.P0_31.degrade_saadc(), p.SAADC, p.P0_14).await;

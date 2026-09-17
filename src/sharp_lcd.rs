@@ -527,3 +527,15 @@ pub fn new_status_lcd(
         .with_min_render_interval(VCOM_INTERVAL);
     (processor, SharpVcomRunner { bus })
 }
+
+pub fn new_lcd_with_renderer<R: DisplayRenderer<BinaryColor>>(
+    spi: Spim<'static>,
+    cs: Output<'static>,
+    renderer: R,
+) -> (DisplayProcessor<SharpDisplay, R>, SharpVcomRunner) {
+    let bus = LCD_BUS.init(Mutex::new(SharpBus::new(spi, cs)));
+    let display = SharpDisplay::new(bus);
+    let processor =
+        DisplayProcessor::with_renderer(display, renderer).with_min_render_interval(VCOM_INTERVAL);
+    (processor, SharpVcomRunner { bus })
+}
