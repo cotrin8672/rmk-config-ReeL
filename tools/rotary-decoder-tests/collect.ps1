@@ -2,7 +2,7 @@ param(
     [string]$Port,
     [ValidateSet('Ambiguous','Next')][string]$Mode = 'Ambiguous',
     [switch]$NewCapture,
-    [string]$OutputDirectory = (Join-Path $env:USERPROFILE 'Downloads\ReeL-rotary-logs'),
+    [string]$OutputDirectory = (Join-Path ([Environment]::GetFolderPath('UserProfile')) 'Downloads/ReeL-rotary-logs'),
     [int]$TimeoutSeconds = 180,
     [string]$ValidateFile
 )
