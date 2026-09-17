@@ -5,6 +5,7 @@ mod keymap;
 #[macro_use]
 mod macros;
 mod calibration_config;
+mod calibration_data;
 mod lcd_dirty_lines;
 mod motion_chunk;
 mod motion_gain;
@@ -249,6 +250,9 @@ async fn main(spawner: Spawner) {
         .default_profile
         .with_mode(Some(MorseMode::HoldOnOtherPress))
         .with_hold_timeout_ms(Some(220));
+    // Use Consumer-page volume keys, not Keyboard-page KbVolumeUp/Down.
+    // Keep LGUI held: suppressing it can report a Windows-key release while
+    // the physical key is still down. Only the wheel action is replaced.
     let windows_modifier = StateBits {
         modifiers: rmk::types::modifier::ModifierCombination::LGUI,
         ..StateBits::default()
@@ -259,10 +263,10 @@ async fn main(spawner: Spawner) {
         .push(Fork::new(
             rmk::k!(MouseWheelUp),
             rmk::k!(MouseWheelUp),
-            rmk::k!(KbVolumeUp),
+            rmk::k!(AudioVolUp),
             windows_modifier,
             StateBits::default(),
-            rmk::types::modifier::ModifierCombination::default(),
+            rmk::types::modifier::ModifierCombination::LGUI,
             false,
         ))
         .unwrap();
@@ -272,10 +276,10 @@ async fn main(spawner: Spawner) {
         .push(Fork::new(
             rmk::k!(MouseWheelDown),
             rmk::k!(MouseWheelDown),
-            rmk::k!(KbVolumeDown),
+            rmk::k!(AudioVolDown),
             windows_modifier,
             StateBits::default(),
-            rmk::types::modifier::ModifierCombination::default(),
+            rmk::types::modifier::ModifierCombination::LGUI,
             false,
         ))
         .unwrap();

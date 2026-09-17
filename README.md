@@ -37,9 +37,10 @@ memory LCDs on both halves are driven by this firmware.
   calibration matrix uses precomputed one-angle rotation coefficients, while
   the existing non-orthogonal calibration uses a normalized direction map
   cached in 8 octants with 64 ratio buckets. Either cache is rebuilt only when
-  the calibration matrix changes. Small motion uses an adaptive low-pass
-  filter, larger motion bypasses it, and the independent gain is unity by
-  default (`src/motion_gain.rs`).
+  the calibration matrix changes. Motion is not low-pass filtered. After the
+  direction transform, the existing directional/user sensitivity and baseline
+  half gain are applied with retained fractional remainders
+  (`src/motion_gain.rs`).
 
 - Auto Mouse Layer 3 with a five-second timeout
 - Mouse buttons 1/2 on the J/K positions while the mouse layer is active
