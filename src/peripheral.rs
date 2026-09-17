@@ -4,6 +4,7 @@
 #[macro_use]
 mod macros;
 mod lcd_dirty_lines;
+mod rotary_capture;
 mod rotary_decoder;
 mod sharp_lcd;
 mod xiao_battery;
@@ -15,7 +16,7 @@ use embassy_nrf::gpio::{Input, Level, Output, OutputDrive, Pull};
 use embassy_nrf::mode::Async;
 use embassy_nrf::peripherals::{RNG, SPI3, USBD};
 use embassy_nrf::saadc::Input as _;
-use embassy_nrf::{bind_interrupts, gpiote, rng, saadc, spim, usb};
+use embassy_nrf::{bind_interrupts, rng, saadc, spim, usb};
 use embassy_sync::channel::Channel;
 use embassy_time::Timer;
 use nrf_mpsl::Flash;
@@ -52,6 +53,7 @@ bind_interrupts!(struct Irqs {
     CLOCK_POWER => nrf_sdc::mpsl::ClockInterruptHandler, usb::vbus_detect::InterruptHandler;
     RADIO => nrf_sdc::mpsl::HighPrioInterruptHandler;
     TIMER0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
+    TIMER3 => rotary_capture::InterruptHandler;
     RTC0 => nrf_sdc::mpsl::HighPrioInterruptHandler;
     SPIM3 => spim::InterruptHandler<SPI3>;
     SAADC => saadc::InterruptHandler;
@@ -93,47 +95,10 @@ fn ble_addr() -> [u8; 6] {
     unwrap!(addr.to_le_bytes()[..6].try_into())
 }
 
-/// Rotary encoder reader for the left half.
-///
-/// Phase A is debounced as the one-edge-per-detent click clock. Direction
-/// comes from signed raw Gray-code movement captured around that A edge, so
-/// phase B is never sampled at a fragile fixed time relative to A.
+/// Hardware acquisition continues while the event task sends press/release.
 struct LeftRotaryEncoder {
-    pin_a: gpiote::InputChannel<'static>,
-    pin_b: gpiote::InputChannel<'static>,
+    capture: rotary_capture::Capture,
     decoder: ClockedDetentDecoder,
-    last_levels: (bool, bool),
-}
-
-impl LeftRotaryEncoder {
-    fn levels() -> (bool, bool) {
-        // Both encoder pins are on P1. Read the port once so A/B belong to
-        // the same instant; two Input::is_high calls can be torn by an IRQ.
-        let port = embassy_nrf::pac::P1.in_().read();
-        (port.pin(14), port.pin(15))
-    }
-
-    fn new(pin_a: gpiote::InputChannel<'static>, pin_b: gpiote::InputChannel<'static>) -> Self {
-        let last_levels = Self::levels();
-        let decoder = ClockedDetentDecoder::new(last_levels.0, last_levels.1);
-        Self {
-            pin_a,
-            pin_b,
-            decoder,
-            last_levels,
-        }
-    }
-
-    async fn feed(&mut self, levels: (bool, bool)) {
-        self.last_levels = levels;
-        if let Some(detent) = self.decoder.update(levels.0, levels.1) {
-            let direction = match detent {
-                Detent::Clockwise => Direction::Clockwise,
-                Detent::CounterClockwise => Direction::CounterClockwise,
-            };
-            ENCODER_DIRECTION_CHANNEL.send(direction).await;
-        }
-    }
 }
 
 const ENCODER_EVENT_QUEUE_SIZE: usize = 64;
@@ -144,9 +109,12 @@ static ENCODER_DIRECTION_CHANNEL: Channel<RawMutex, Direction, ENCODER_EVENT_QUE
 async fn encoder_event_task() -> ! {
     loop {
         let direction = ENCODER_DIRECTION_CHANNEL.receive().await;
+        if rotary_capture::fault_code() != 0 {
+            continue;
+        }
         publish_event_async(KeyboardEvent::rotary_encoder(0, direction, true)).await;
         // Keep the tap visible to the split transport while edge capture keeps
-        // running independently in LeftRotaryEncoder::run.
+        // running independently in GPIOTE/PPI hardware.
         Timer::after_millis(5).await;
         publish_event_async(KeyboardEvent::rotary_encoder(0, direction, false)).await;
     }
@@ -154,32 +122,27 @@ async fn encoder_event_task() -> ! {
 
 impl Runnable for LeftRotaryEncoder {
     async fn run(&mut self) -> ! {
-        use rmk::embassy_futures::select::select;
-
-        // Two 32.768 kHz timer ticks (~61 us).
-        const SAMPLE_PERIOD_TICKS: u64 = 2;
-
         loop {
-            // Dedicated GPIOTE channels latch the first edge while the CPU is
-            // asleep. Re-read after arming so an edge in the rearm window is
-            // fed instead of being cleared and lost.
-            let levels = {
-                let wait_a = self.pin_a.wait();
-                let wait_b = self.pin_b.wait();
-                let armed_levels = Self::levels();
-                if armed_levels == self.last_levels {
-                    select(wait_a, wait_b).await;
+            let frame = match self.capture.receive().await {
+                Ok(frame) => frame,
+                Err(code) => {
+                    defmt::error!("Rotary capture stopped: fault {} (reset required)", code);
+                    core::future::pending::<()>().await;
+                    unreachable!();
                 }
-                Self::levels()
             };
-            self.feed(levels).await;
-
-            loop {
-                if self.decoder.is_idle() {
-                    break;
+            match self.decoder.update(frame) {
+                Ok(Some(detent)) => {
+                    let direction = match detent {
+                        Detent::Clockwise => Direction::Clockwise,
+                        Detent::CounterClockwise => Direction::CounterClockwise,
+                    };
+                    if ENCODER_DIRECTION_CHANNEL.try_send(direction).is_err() {
+                        rotary_capture::fail(5);
+                    }
                 }
-                Timer::after_ticks(SAMPLE_PERIOD_TICKS).await;
-                self.feed(Self::levels()).await;
+                Ok(None) => {}
+                Err(()) => rotary_capture::fail(4),
             }
         }
     }
@@ -259,19 +222,34 @@ async fn main(spawner: Spawner) {
 
     let debouncer = DefaultDebouncer::new();
     let mut matrix = Matrix::<_, _, _, 4, 6, true>::new(row_pins, col_pins, debouncer);
-    let encoder_a = gpiote::InputChannel::new(
-        p.GPIOTE_CH0,
-        p.P1_14,
-        Pull::Up,
-        gpiote::InputChannelPolarity::Toggle,
+    let capture = rotary_capture::Capture::new(
+        rotary_capture::Resources {
+            P1_14: p.P1_14,
+            P1_15: p.P1_15,
+            GPIOTE_CH0: p.GPIOTE_CH0,
+            GPIOTE_CH1: p.GPIOTE_CH1,
+            TIMER1: p.TIMER1,
+            TIMER2: p.TIMER2,
+            TIMER3: p.TIMER3,
+            TIMER4: p.TIMER4,
+            PPI_CH0: p.PPI_CH0,
+            PPI_CH1: p.PPI_CH1,
+            PPI_CH2: p.PPI_CH2,
+            PPI_CH3: p.PPI_CH3,
+            PPI_CH4: p.PPI_CH4,
+            PPI_CH5: p.PPI_CH5,
+            PPI_CH6: p.PPI_CH6,
+            PPI_CH7: p.PPI_CH7,
+            PPI_CH8: p.PPI_CH8,
+            PPI_GROUP0: p.PPI_GROUP0,
+            PPI_GROUP1: p.PPI_GROUP1,
+        },
+        Irqs,
     );
-    let encoder_b = gpiote::InputChannel::new(
-        p.GPIOTE_CH1,
-        p.P1_15,
-        Pull::Up,
-        gpiote::InputChannelPolarity::Toggle,
-    );
-    let mut encoder = LeftRotaryEncoder::new(encoder_a, encoder_b);
+    let mut encoder = LeftRotaryEncoder {
+        capture,
+        decoder: ClockedDetentDecoder::new(),
+    };
     spawner.spawn(encoder_event_task().unwrap());
     let mut watchdog = Nrf52Watchdog::default_runner(p.WDT);
 
