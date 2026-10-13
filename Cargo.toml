@@ -7,6 +7,7 @@ license = "MIT OR Apache-2.0"
 [dependencies]
 rmk = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172", features = [
     "nrf52840_ble",
+    "use_1m_phy",
     "split",
     "async_matrix",
     "adafruit_bl",
