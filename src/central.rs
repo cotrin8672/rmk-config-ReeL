@@ -14,6 +14,12 @@ mod profile_cpi_config;
 mod quick_mod_tap;
 mod sharp_lcd;
 mod smart_aml_trigger;
+#[cfg(feature = "trackball-diagnostics")]
+mod trackball_camera;
+#[cfg(feature = "trackball-diagnostics")]
+mod trackball_diagnostic_data;
+#[cfg(feature = "trackball-diagnostics")]
+mod trackball_sensor_trace;
 mod trackball_transform;
 mod transformed_pointing_device;
 mod vial;
@@ -337,12 +343,16 @@ async fn main(spawner: Spawner) {
     let pmw_cs = Output::new(p.P1_12, Level::High, OutputDrive::Standard);
     let pmw_motion = Some(Input::new(p.P1_14, Pull::Up));
     let pmw_spi = BitBangSpiBus::new(pmw_sck, pmw_sdio);
+    #[cfg(feature = "trackball-diagnostics")]
+    let pmw_spi = trackball_sensor_trace::SensorTrace::new(pmw_spi);
     let pmw_config = Pmw3610Config {
         res_cpi: 1600,
         smart_mode: true,
         ..Default::default()
     };
     let pmw_sensor = Pmw3610::new(TRACKBALL_DEVICE_ID, pmw_spi, pmw_cs, pmw_motion, pmw_config);
+    #[cfg(feature = "trackball-diagnostics")]
+    let pmw_sensor = trackball_camera::CameraSensor::new(pmw_sensor);
     let mut trackball = TransformingPointingDevice::with_report_hz(
         TRACKBALL_DEVICE_ID,
         pmw_sensor,
