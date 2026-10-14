@@ -123,6 +123,7 @@ export function summarizeRun(run) {
 export function comparisonIssues(a, b) {
   const issues = [];
   if (!a.complete || !b.complete) issues.push("未完了・通信欠落のある測定は比較できません");
+  if (a.source === "sensor" && b.source === "sensor" && (a.transport || "usb") !== (b.transport || "usb")) issues.push("接続方式が異なります");
   if (a.source !== b.source || a.unadjusted !== b.unadjusted) issues.push("入力元が異なります");
   if (a.conditions.cpi !== b.conditions.cpi) issues.push("記録したCPIが異なります");
   if (a.conditions.travel !== b.conditions.travel) issues.push("回した量の目安が異なります");
@@ -138,15 +139,124 @@ export function csvCell(value) {
 }
 
 export function rawCsv(run) {
-  const rows = [["condition", "ball", "position", "cpi_recorded", "travel_mm_recorded", "settings", "source", "protocol", "stroke", "direction", "t_ms", "seq", "dx", "dy", "squal", "shutter", "motion", "lost", "invalid_reason"]];
+  const rows = [["condition", "ball", "position", "cpi_recorded", "travel_mm_recorded", "settings", "source", "transport", "protocol", "stroke", "direction", "t_ms", "seq", "dx", "dy", "squal", "shutter", "motion", "lost", "invalid_reason"]];
   run.strokes.forEach((stroke, index) => {
     for (const sample of stroke.samples || []) rows.push([
       run.conditions.name, run.conditions.ball, run.conditions.position, run.conditions.cpi, run.conditions.travel, run.conditions.note,
-      run.source, run.protocol, index + 1, directions[stroke.direction]?.label || "—",
+      run.source, run.transport || "", run.protocol, index + 1, directions[stroke.direction]?.label || "—",
       sample.t, sample.seq ?? "", sample.dx, sample.dy, sample.squal ?? "", sample.shutter ?? "", sample.motion ?? "", sample.lost || 0, stroke.invalidReason || ""
     ]);
   });
   return "\ufeff" + rows.map(row => row.map(csvCell).join(",")).join("\r\n");
+}
+
+
+export const bleService = "ef558a00-6fa0-4c67-aa6e-06b1cdf63192";
+const bleCommand = "ef558a01-6fa0-4c67-aa6e-06b1cdf63192";
+const bleData = "ef558a02-6fa0-4c67-aa6e-06b1cdf63192";
+
+export function frameMetrics(pixels) {
+  if (pixels.length !== 484 || Array.from(pixels).some(p => !Number.isInteger(p) || p < 0 || p > 127)) throw new Error("Invalid 22x22 frame");
+  const mean = pixels.reduce((sum, p) => sum + p, 0) / 484;
+  const sd = Math.sqrt(pixels.reduce((sum, p) => sum + (p - mean) ** 2, 0) / 484);
+  let gradient = 0, neighbors = 0;
+  for (let y = 0; y < 22; y++) for (let x = 0; x < 22; x++) {
+    const index = y * 22 + x;
+    if (x < 21) { gradient += (pixels[index + 1] - pixels[index]) ** 2; neighbors++; }
+    if (y < 21) { gradient += (pixels[index + 22] - pixels[index]) ** 2; neighbors++; }
+  }
+  return { mean, sd, gradient: Math.sqrt(gradient / neighbors),
+    dark: pixels.filter(p => p <= 2).length / 484 * 100,
+    bright: pixels.filter(p => p >= 125).length / 484 * 100 };
+}
+
+
+export function frameRgba(pixels, stretch = false) {
+  frameMetrics(pixels);
+  const low = stretch ? Math.min(...pixels) : 0, high = stretch ? Math.max(...pixels) : 127;
+  const rgba = new Uint8ClampedArray(484 * 4);
+  for (let y = 0; y < 22; y++) for (let x = 0; x < 22; x++) {
+    // Datasheet Figure 17: first pixel at top-right, down columns, right to left.
+    const value = pixels[(21 - x) * 22 + y];
+    const level = high > low ? Math.round((value - low) / (high - low) * 255) : Math.round(value / 127 * 255);
+    const i = (y * 22 + x) * 4; rgba[i] = rgba[i + 1] = rgba[i + 2] = level; rgba[i + 3] = 255;
+  }
+  return rgba;
+}
+
+export class SensorPackets {
+  invalid = 0;
+  frame = null;
+  last = null;
+  epoch = 0;
+  push(value) {
+    const bytes = value instanceof DataView ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : value;
+    const bad = () => { this.invalid++; if (this.frame) this.frame.invalid = true; return null; };
+    if (!(bytes instanceof Uint8Array) || bytes.length !== 20 || bytes[1] !== 1) return bad();
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    if (bytes[0] === 84) {
+      const seq = view.getUint32(2, true), micros = view.getUint32(6, true);
+      const dx = view.getInt16(10, true), dy = view.getInt16(12, true), motion = bytes[17], cpi = view.getUint16(18, true);
+      if (dx < -2048 || dx > 2047 || dy < -2048 || dy > 2047 || (!(motion & 128) && (dx || dy)) || cpi < 200 || cpi > 3200 || cpi % 200) return bad();
+      if (this.last && ((seq - this.last.seq) >>> 0) > 0x80000000) this.epoch = 0;
+      else if (this.last && micros < this.last.micros && this.last.micros - micros > 0x80000000) this.epoch += 2 ** 32;
+      this.last = { seq, micros };
+      return { kind: "sample", sample: { seq, t: (this.epoch + micros) / 1000, dx, dy, squal: bytes[14], shutter: view.getUint16(15, true), motion, cpi } };
+    }
+    const id = view.getUint16(2, true);
+    if (bytes[0] === 83) {
+      if (bytes[4] === 1) {
+        this.frame = { id, pixels: new Uint8Array(484), seen: new Set(), invalid: false };
+        return { kind: "start", id };
+      }
+      if (bytes[4] === 2 || bytes[4] === 3) {
+        const frame = this.frame; this.frame = null;
+        if (bytes[4] === 3) return { kind: "error", message: "センサーの撮影・追跡復帰に失敗しました。電源を入れ直して再接続してください。" };
+        if (!frame || frame.id !== id || frame.invalid || frame.seen.size !== 35) return { kind: "error", message: "画像データが欠けています。このフレームは表示・保存しません。" };
+        return { kind: "frame", id, pixels: frame.pixels };
+      }
+      return bad();
+    }
+    if (bytes[0] === 70) {
+      const offset = view.getUint16(4, true), frame = this.frame;
+      if (!frame || frame.id !== id || offset >= 484 || offset % 14 || frame.seen.has(offset)) return bad();
+      const count = Math.min(14, 484 - offset);
+      if (bytes.slice(6, 6 + count).some(p => p > 127) || bytes.slice(6 + count).some(p => p !== 0)) return bad();
+      frame.pixels.set(bytes.slice(6, 6 + count), offset); frame.seen.add(offset);
+      return { kind: "progress", count: Math.min(484, frame.seen.size * 14) };
+    }
+    return bad();
+  }
+}
+
+export class BleSensorConnection {
+  constructor(onPacket, onDisconnect) { this.onPacket = onPacket; this.onDisconnect = onDisconnect; }
+  async connect(bluetooth) {
+    this.device = await bluetooth.requestDevice({ filters: [{ namePrefix: "ReeL" }], optionalServices: [bleService] });
+    this.disconnected = () => { this.command = null; this.onDisconnect(); };
+    this.device.addEventListener("gattserverdisconnected", this.disconnected);
+    try {
+      const server = await this.device.gatt.connect();
+      const service = await server.getPrimaryService(bleService);
+      this.command = await service.getCharacteristic(bleCommand);
+      this.data = await service.getCharacteristic(bleData);
+      this.notification = event => this.onPacket(event.target.value);
+      this.data.addEventListener("characteristicvaluechanged", this.notification);
+      await this.data.startNotifications();
+      await this.setMode(1);
+    } catch (error) { await this.close(); throw error; }
+  }
+  async setMode(mode) {
+    if (![0, 1, 2].includes(mode) || !this.command || !this.device?.gatt.connected) throw new Error("BLEが接続されていません");
+    await this.command.writeValueWithResponse(new Uint8Array([82, 84, 1, mode]));
+  }
+  async close() {
+    if (this.command && this.device?.gatt.connected) await this.setMode(0).catch(() => {});
+    this.data?.removeEventListener("characteristicvaluechanged", this.notification);
+    this.device?.removeEventListener("gattserverdisconnected", this.disconnected);
+    if (this.device?.gatt.connected) this.device.gatt.disconnect();
+    this.command = null;
+  }
 }
 
 if (typeof document !== "undefined") initialize();
@@ -156,7 +266,8 @@ function initialize() {
   const storageKey = "reel-trackball-lab-v1";
   let history = [], storageHealthy = true;
   const state = { source: null, live: [], previous: null, arrival: 0, lost: 0, invalid: 0, unadjusted: null,
-    port: null, reader: null, readTask: null, closing: false, demoTimer: null, session: null, capture: null, run: null };
+    ble: null, transport: null, port: null, reader: null, readTask: null, closing: false, demoTimer: null, session: null, capture: null, run: null };
+  const camera = { frame: null, reference: null, working: false, continuous: false, timeout: null, next: null, demo: null, started: 0, requestConditions: null };
   const fmt = (value, suffix = "", digits = 1) => Number.isFinite(value) ? value.toFixed(digits) + suffix : "—";
   const sourceName = source => ({ sensor: "センサー直結", browser: "ブラウザ入力", demo: "デモ・合成データ" }[source] || "未接続");
   const notice = message => { $("notice").textContent = message; $("notice").hidden = !message; };
@@ -181,16 +292,18 @@ function initialize() {
   function sourceStatus(message, kind = "") {
     $("connectionStatus").textContent = message;
     $("statusDot").className = "dot " + kind;
-    $("prepare").disabled = !!state.session || !state.source || !fresh();
+    $("prepare").disabled = !!state.session || camera.working || camera.continuous || !state.source || !fresh();
     $("coordinateLabel").textContent = state.source === "sensor" ? "補正前のセンサー counts" : state.source === "demo" ? "合成データ / counts" : state.source === "browser" ? "PC側の移動単位 u" : "入力待ち";
   }
   function resetInput(source) {
     state.source = source; state.live = []; state.previous = null; state.arrival = 0; state.lost = 0; state.invalid = 0; state.unadjusted = null;
-    $("connectSensor").textContent = source === "sensor" ? "センサーを切断" : "センサーを接続";
-    $("sourceDetail").textContent = source === "sensor" ? "補正前のΔX/ΔY・SQUAL・露光。診断ファームを入れた右側をUSB接続してください。"
+    $("connectSensor").textContent = state.port ? "USBを切断" : "USBで接続";
+    $("connectBle").textContent = state.ble ? "BLEを切断" : "BLEで接続";
+    $("sourceDetail").textContent = source === "sensor" ? (state.transport === "ble" ? "BLEでセンサーの生データを受信。22×22の実画像も撮影できます。" : "USBで補正前のΔX/ΔY・SQUAL・露光を受信。実画像の撮影はBLE接続で使えます。")
       : source === "browser" ? "PC側の出力を測ります。SQUAL・露光は取得できません。測定中は対象のトラックボールだけを動かしてください。"
       : source === "demo" ? "画面と測定手順を試すための合成データです。実機の評価には使えません。"
-      : "センサー直結では、補正前の移動量・SQUAL・露光値を読み取ります。";
+      : "BLEでセンサーの生データ・実画像を受信できます。";
+    renderCamera();
     sourceStatus(source === "sensor" ? "接続済み · センサーデータ待ち" : sourceName(source), source === "demo" ? "demo" : "");
   }
   function ingest(sample) {
@@ -213,6 +326,10 @@ function initialize() {
   async function disconnect() {
     stopSession("入力を切り替えたため中断しました。");
     clearInterval(state.demoTimer); state.demoTimer = null;
+    stopCamera(); camera.frame = null; camera.reference = null;
+    paintFrame("sensorImage", null); paintFrame("referenceImage", null); renderFrameMetrics();
+    if (state.ble) { const ble = state.ble; state.ble = null; await ble.close(); }
+    state.transport = null;
     state.closing = true;
     if (state.reader) await state.reader.cancel().catch(() => {});
     if (state.readTask) await state.readTask;
@@ -245,11 +362,46 @@ function initialize() {
       await disconnect();
       const port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x4c4b, usbProductId: 0x524d }] });
       await port.open({ baudRate: 115200, bufferSize: 65536 });
-      state.port = port; resetInput("sensor"); notice("");
+      state.port = port; state.transport = "usb"; resetInput("sensor"); notice("");
       state.readTask = readSensor(port);
     } catch (error) {
       if (error.name !== "NotFoundError") notice("接続できませんでした: " + error.message);
     } finally { $("connectSensor").disabled = false; }
+  });
+  $("connectBle").addEventListener("click", async () => {
+    if (state.ble) { await disconnect(); return; }
+    if (!navigator.bluetooth || !window.isSecureContext) { notice("BLE接続はChrome / Edgeで、このページをHTTPSまたはlocalhostから直接開いてください。"); return; }
+    $("connectBle").disabled = true;
+    try {
+      await disconnect();
+      const parser = new SensorPackets();
+      const ble = new BleSensorConnection(value => {
+        if (state.ble !== ble) return;
+        const event = parser.push(value); state.invalid = parser.invalid;
+        if (!event) return;
+        if (event.kind === "sample") {
+          if (state.live.at(-1)?.cpi && state.live.at(-1).cpi !== event.sample.cpi) stopSession("CPIが変わったため測定を中断しました。");
+          ingest(event.sample);
+        } else if (event.kind === "start") {
+          stopSession("撮影中は移動量を測定できません。");
+          camera.working = true;
+          $("cameraStatus").textContent = "センサー撮影中 · 追跡を一時停止";
+        } else if (event.kind === "progress") $("cameraStatus").textContent = '画像を受信中 · ' + event.count + ' / 484 px';
+        else if (event.kind === "frame") finishFrame(event.pixels, event.id);
+        else if (event.kind === "error") { stopCamera(); notice(event.message); $("cameraStatus").textContent = "撮影失敗 · 再撮影してください"; }
+      }, () => {
+        if (state.ble !== ble) return;
+        state.ble = null; state.arrival = 0; stopCamera(); stopSession("BLEが切断されたため中断しました。");
+        sourceStatus("BLE切断 · 再接続してください", "error");
+        $("connectBle").textContent = "BLEで接続"; renderCamera();
+      });
+      state.ble = ble; state.transport = "ble"; resetInput("sensor");
+      await ble.connect(navigator.bluetooth);
+      notice("BLE接続しました。画像の撮影中はカーソル追跡が一時停止します。");
+    } catch (error) {
+      await disconnect();
+      if (error.name !== "NotFoundError") notice("BLE接続できませんでした。右側の診断ファームとOSのBluetoothペアリングを確認してください: " + error.message);
+    } finally { $("connectBle").disabled = false; renderCamera(); }
   });
   $("browserInput").addEventListener("click", async () => {
     await disconnect(); resetInput("browser"); notice("");
@@ -272,8 +424,100 @@ function initialize() {
     }, 16);
   });
 
+
+  function cameraConditions() {
+    return { name: $("conditionName").value.trim(), ball: $("ball").value.trim(), position: $("position").value.trim(),
+      cpi: state.transport === "ble" ? state.live.at(-1)?.cpi ?? null : Number($("cpi").value), note: $("settingNote").value.trim() };
+  }
+  function paintFrame(id, frame, stretch = $("stretchImage").checked) {
+    const target = $(id), context = target.getContext("2d");
+    context.imageSmoothingEnabled = false;
+    context.fillStyle = "#0e2027"; context.fillRect(0, 0, target.width, target.height);
+    if (!frame) { context.fillStyle = "#7b979f"; context.font = "14px Consolas, monospace"; context.fillText("NO FRAME", 25, 40); return; }
+    const image = document.createElement("canvas"); image.width = image.height = 22;
+    image.getContext("2d").putImageData(new ImageData(frameRgba(frame.pixels, stretch), 22, 22), 0, 0);
+    context.drawImage(image, 0, 0, target.width, target.height);
+  }
+  function renderCamera() {
+    $("prepare").disabled = !!state.session || camera.working || camera.continuous || !state.source || !fresh();
+    const ready = (state.transport === "ble" && state.ble?.command) || state.source === "demo";
+    $("snapshot").disabled = !ready || !!state.session || camera.working || camera.continuous;
+    $("continuous").disabled = !ready || !!state.session || (camera.working && !camera.continuous);
+    $("continuous").textContent = camera.continuous ? "連続撮影を停止" : "連続撮影";
+    $("referenceFrame").disabled = !camera.frame || camera.working;
+    $("exportFrame").disabled = !camera.frame; $("exportPng").disabled = !camera.frame;
+    $("imageKind").textContent = state.source === "demo" ? "DEMO · 合成画像 / 22×22" : "実画像 · 22×22 / 7 bit";
+    if (!camera.frame && !camera.working) $("cameraStatus").textContent = state.source === "demo" ? "合成画像の表示を試せます" : "BLE接続後に撮影できます";
+  }
+  function stopCamera() {
+    clearTimeout(camera.timeout); clearTimeout(camera.next); clearTimeout(camera.demo);
+    camera.timeout = camera.next = null; camera.working = false; camera.continuous = false;
+    renderCamera();
+  }
+  async function requestFrame() {
+    if (camera.working || state.session || !(state.ble?.command || state.source === "demo")) return;
+    camera.working = true; camera.started = performance.now(); camera.requestConditions = cameraConditions();
+    state.live = []; state.previous = null; state.arrival = 0;
+    $("cameraStatus").textContent = "撮影要求中 · 追跡を一時停止"; renderCamera();
+    camera.timeout = setTimeout(() => {
+      stopCamera(); $("cameraStatus").textContent = "撮影タイムアウト · 最後の画像を保持";
+      notice("画像が届きませんでした。診断ファームとBLE接続を確認してください。");
+    }, 8000);
+    try {
+      if (state.source === "demo") {
+        const phase = performance.now() / 700;
+        const pixels = Uint8Array.from({ length: 484 }, (_, i) => Math.round(64 + 28 * Math.sin(i % 22 / 2 + phase) * Math.cos(Math.floor(i / 22) / 2 - phase)));
+        camera.demo = setTimeout(() => finishFrame(pixels, 0), 200);
+      } else await state.ble.setMode(2);
+    } catch (error) { stopCamera(); notice("撮影を開始できませんでした: " + error.message); }
+  }
+  function finishFrame(pixels, id) {
+    clearTimeout(camera.timeout); camera.timeout = null; camera.demo = null;
+    camera.working = false; state.live = []; state.previous = null; state.arrival = 0;
+    camera.frame = { id, date: new Date().toISOString(), source: state.source === "demo" ? "demo" : "sensor-ble",
+      captureMs: performance.now() - camera.started, conditions: camera.requestConditions || cameraConditions(),
+      pixels: Array.from(pixels), metrics: frameMetrics(pixels) };
+    $("cameraStatus").textContent = (camera.frame.source === "demo" ? "合成画像" : "受信完了 · 追跡復帰") + ' · ' + fmt(camera.frame.captureMs, ' ms', 0) + ' / 撮影・転送';
+    paintFrame("sensorImage", camera.frame); renderFrameMetrics(); renderCamera();
+    if (camera.continuous) camera.next = setTimeout(requestFrame, 500);
+  }
+  function renderFrameMetrics() {
+    const b = camera.frame, a = camera.reference;
+    const comparable = a && b && a.source === b.source && a.conditions.cpi === b.conditions.cpi;
+    const labels = [["明るさ 平均", "mean", ""], ["コントラスト σ", "sd", ""], ["隣接画素差 RMS", "gradient", ""], ["暗い画素 ≤2", "dark", "%"], ["明るい画素 ≥125", "bright", "%"]];
+    $("imageMetrics").replaceChildren(...labels.map(([label, key, suffix]) => row([label, a ? fmt(a.metrics[key], suffix, 2) : "—", b ? fmt(b.metrics[key], suffix, 2) : "—", comparable ? fmt(b.metrics[key] - a.metrics[key], suffix, 2) : "—"])));
+    $("frameLabel").textContent = b ? b.conditions.name + ' · ' + b.conditions.ball + ' · ' + b.conditions.position : "撮影待ち";
+    $("referenceLabel").textContent = a ? a.conditions.name + ' · ' + a.conditions.ball + ' · ' + a.conditions.position : "現在の画像を基準Aに保存すると並べて比較できます";
+    const context = $("imageHistogram").getContext("2d"); context.clearRect(0, 0, 512, 100);
+    if (b) {
+      const bins = new Array(128).fill(0); for (const pixel of b.pixels) bins[pixel]++;
+      const max = Math.max(1, ...bins); context.fillStyle = "#087d77";
+      bins.forEach((count, i) => context.fillRect(i * 4, 100 - count / max * 96, 3, count / max * 96));
+    }
+  }
+  $("snapshot").addEventListener("click", requestFrame);
+  $("continuous").addEventListener("click", () => {
+    camera.continuous = !camera.continuous; clearTimeout(camera.next); renderCamera();
+    if (camera.continuous) requestFrame();
+  });
+  $("referenceFrame").addEventListener("click", () => { camera.reference = camera.frame; paintFrame("referenceImage", camera.reference); renderFrameMetrics(); });
+  $("stretchImage").addEventListener("change", () => { paintFrame("sensorImage", camera.frame); paintFrame("referenceImage", camera.reference); });
+  $("exportFrame").addEventListener("click", () => {
+    download(JSON.stringify({ schema: "reel-sensor-frame-v1", width: 22, height: 22, bits: 7,
+      pixelOrder: "columns-top-to-bottom-right-to-left", frame: camera.frame, reference: camera.reference }, null, 2), "reel-sensor-frame.json", "application/json");
+  });
+  $("exportPng").addEventListener("click", () => {
+    const image = document.createElement("canvas"); image.width = image.height = 22;
+    image.getContext("2d").putImageData(new ImageData(frameRgba(camera.frame.pixels), 22, 22), 0, 0);
+    const filename = camera.frame.source === "demo" ? "reel-sensor-demo.png" : "reel-sensor-22x22.png";
+    image.toBlob(blob => { if (blob) download(blob, filename, "image/png"); else notice("PNGを生成できませんでした。"); }, "image/png");
+  });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) { camera.continuous = false; clearTimeout(camera.next); renderCamera(); } });
+  paintFrame("sensorImage", null); paintFrame("referenceImage", null);
+
   function lockControls(locked) {
     for (const field of $("conditions").elements) field.disabled = locked;
+    renderCamera();
     $("protocol").disabled = locked; $("prepare").disabled = locked; $("cancel").disabled = !locked;
   }
   function promptStep() {
@@ -287,17 +531,17 @@ function initialize() {
     $("captureBar").firstElementChild.style.width = "0%";
   }
   $("prepare").addEventListener("click", async () => {
-    if (state.session || !state.source || !fresh() || !$("conditions").reportValidity()) return;
+    if (state.session || camera.working || camera.continuous || !state.source || !fresh() || !$("conditions").reportValidity()) return;
     const previousRun = state.run;
     state.run = {
-      id: crypto.randomUUID(), date: new Date().toISOString(), source: state.source, protocol: $("protocol").value,
+      id: crypto.randomUUID(), date: new Date().toISOString(), source: state.source, transport: state.transport, protocol: $("protocol").value,
       unadjusted: null, complete: false, strokes: [],
       conditions: { name: $("conditionName").value.trim(), ball: $("ball").value.trim(), position: $("position").value.trim(), cpi: Number($("cpi").value), travel: Number($("travel").value), note: $("settingNote").value.trim() }
     };
+    if (state.transport === "ble" && state.live.at(-1)?.cpi) state.run.conditions.cpi = state.live.at(-1).cpi;
     state.session = { protocol: state.run.protocol }; lockControls(true);
     try {
-      if (state.source !== "demo") {
-        if (state.source === "browser") {
+      if (state.source === "browser") {
           try {
             const request = $("captureArea").requestPointerLock({ unadjustedMovement: true });
             state.unadjusted = !!request?.then; await request;
@@ -307,7 +551,6 @@ function initialize() {
           }
           state.run.unadjusted = state.unadjusted;
           notice(state.unadjusted ? "ブラウザ入力を計測します。加速なしの入力を要求済みです。センサー内部値ではありません。" : "加速なしの入力を確認できません。この条件を結果に記録します。同じ環境で比較してください。");
-        } else await $("captureArea").requestPointerLock();
         if (document.pointerLockElement !== $("captureArea")) throw new Error("Pointer Lockを利用できません");
       }
       $("captureArea").focus(); promptStep(); renderResults();
@@ -380,7 +623,7 @@ function initialize() {
     const dx = event.movementX, dy = event.movementY;
     if (Number.isFinite(dx) && Number.isFinite(dy) && (dx || dy)) ingest({ t: performance.now(), dx, dy });
   });
-  document.addEventListener("pointerlockchange", () => { if (state.session && state.source !== "demo" && document.pointerLockElement !== $("captureArea")) stopSession("ポインタの固定が解除されました。未完了の結果は比較に使いません。"); });
+  document.addEventListener("pointerlockchange", () => { if (state.session && state.source === "browser" && document.pointerLockElement !== $("captureArea")) stopSession("ポインタの固定が解除されました。未完了の結果は比較に使いません。"); });
   window.addEventListener("blur", () => stopSession("画面のフォーカスが外れたため中断しました。"));
 
   function saveHistory() {
@@ -473,9 +716,10 @@ function initialize() {
     $("liveRate").textContent = state.source === "browser" && alive ? fmt(live.length / 4, "", 0) : alive && span > 0 ? fmt((live.length - 1) * 1000 / span, "", 0) : "—";
     $("liveLost").textContent = state.source === "sensor" ? `${state.lost} / 不正 ${state.invalid}` : "—";
     if (state.source === "sensor") {
-      sourceStatus(alive ? (state.lost || state.invalid ? "センサー受信中 · 通信欠落あり" : "センサー直結 · 受信中") : state.port ? "データ待ち · 診断ファームと右側ポートを確認" : "センサー切断", alive ? state.lost || state.invalid ? "error" : "live" : "error");
-      if (!alive && state.session) stopSession("センサーデータが途切れました。未完了の結果は比較に使いません。");
+      sourceStatus(camera.working ? "センサー撮影中 · 追跡を一時停止" : alive ? (state.lost || state.invalid ? (state.transport === "ble" ? "BLE" : "USB") + "受信中 · 通信欠落あり" : (state.transport === "ble" ? "BLE" : "USB") + " · センサー受信中") : state.port || state.ble ? "データ待ち · 診断ファームと接続を確認" : "センサー切断", alive ? state.lost || state.invalid ? "error" : "live" : "error");
+      if (!alive && state.session && !camera.working) stopSession("センサーデータが途切れました。未完了の結果は比較に使いません。");
     }
+    renderCamera();
     if (state.capture) {
       const elapsed = performance.now() - state.capture.wallStart;
       $("captureBar").firstElementChild.style.width = Math.min(100, elapsed / (["rest", "free"].includes(state.session.protocol) ? 50 : state.session.protocol === "slow" ? 25 : 5)) + "%";

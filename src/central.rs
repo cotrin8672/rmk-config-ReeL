@@ -15,6 +15,8 @@ mod quick_mod_tap;
 mod sharp_lcd;
 mod smart_aml_trigger;
 #[cfg(feature = "trackball-diagnostics")]
+mod trackball_camera;
+#[cfg(feature = "trackball-diagnostics")]
 mod trackball_diagnostic_data;
 #[cfg(feature = "trackball-diagnostics")]
 mod trackball_sensor_trace;
@@ -349,6 +351,8 @@ async fn main(spawner: Spawner) {
         ..Default::default()
     };
     let pmw_sensor = Pmw3610::new(TRACKBALL_DEVICE_ID, pmw_spi, pmw_cs, pmw_motion, pmw_config);
+    #[cfg(feature = "trackball-diagnostics")]
+    let pmw_sensor = trackball_camera::CameraSensor::new(pmw_sensor);
     let mut trackball = TransformingPointingDevice::with_report_hz(
         TRACKBALL_DEVICE_ID,
         pmw_sensor,

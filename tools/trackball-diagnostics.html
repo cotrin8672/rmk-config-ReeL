@@ -20,19 +20,32 @@
     </section>
     <p id="notice" class="notice" role="status" hidden></p>
     <section class="card connection" aria-label="入力の接続">
-      <div><span id="statusDot" class="dot"></span><strong id="connectionStatus" aria-live="polite">入力を選んでください</strong><p id="sourceDetail">センサー直結では、補正前の移動量・SQUAL・露光値を読み取ります。</p></div>
-      <div class="actions"><button id="connectSensor" class="primary" type="button">センサーを接続</button><button id="browserInput" type="button">ブラウザ入力を使う</button><button id="demoInput" class="quiet" type="button">デモを見る</button></div>
+      <div><span id="statusDot" class="dot"></span><strong id="connectionStatus" aria-live="polite">入力を選んでください</strong><p id="sourceDetail">BLEで補正前の移動量・SQUAL・露光値と、センサーの実画像を読み取ります。</p></div>
+      <div class="actions"><button id="connectBle" class="primary" type="button">BLEで接続</button><button id="connectSensor" type="button">USBで接続</button><button id="browserInput" type="button">ブラウザ入力を使う</button><button id="demoInput" class="quiet" type="button">デモを見る</button></div>
     </section>
     <details class="help card">
       <summary>初めて使うとき・診断ファームの準備</summary>
       <ol>
-        <li>右側に <strong>reel_right_diagnostics.uf2</strong> を書き込み、USBでPCにつなぎます。<a id="firmwareBuild" href="https://github.com/cotrin8672/rmk-config-ReeL/actions/workflows/build-rmk.yml?query=branch%3Acodex%2Ftrackball-calibration-lab" target="_blank" rel="noopener">診断ファームのビルド成果物 ↗</a> の <strong>reel-rmk-firmware</strong> に含まれます。</li>
-        <li>Chrome / Edgeで「センサーを接続」を押し、<strong>右側のReeLのシリアルポート</strong>を選びます。通常のキーボード入力はそのまま使えます。</li>
+        <li>右側に <strong>reel_right_diagnostics.uf2</strong> を書き込みます。初回の書き込みにはUSBを使います。<a id="firmwareBuild" href="https://github.com/cotrin8672/rmk-config-ReeL/actions/workflows/build-rmk.yml?query=branch%3Acodex%2Ftrackball-calibration-lab" target="_blank" rel="noopener">診断ファームのビルド成果物 ↗</a> の <strong>reel-rmk-firmware</strong> に含まれます。</li>
+        <li>右側のReeLをPCとBluetoothでペアリングします。Chrome / EdgeでこのURLを直接開き、「BLEで接続」でReeLを選ぶと、USBを外して計測・撮影できます。通常のキー入力も同じBLE接続で使います。</li>
         <li>条件を記録し、静止 → 低速4方向 → 高速4方向の順に測ります。球、CPI、ケース位置を同時に変えず、各条件で同じ量を回します。</li>
         <li>ケースを調整した後に「角度・感度の較正」で補正します。測定後は通常の <strong>reel_right.uf2</strong> に戻します。</li>
       </ol>
+      <p>USBで移動量だけ測る場合は「USBで接続」から右側のシリアルポートを選びます。実画像の撮影はBLE接続で使えます。古い診断ファームではBLE撮影が使えないため、最新のものを書き込んでください。</p>
       <p>ブラウザ入力は書き換えなしで使えます。SQUAL・露光は取得できず、OSやファームの補正も含むPC側の出力を測ります。診断ファームは静止中も約4 msごとに読み出すため、通常版と消費電力・タイミングが異なります。</p>
     </details>
+    <section class="card camera-card" aria-label="センサーの実画像">
+      <div class="card-head"><h2>センサーが見ている画像</h2><span id="imageKind">実画像 · 22×22 / 7 bit</span></div>
+      <div class="camera-controls actions"><button id="snapshot" class="primary" type="button" disabled>1枚撮影</button><button id="continuous" type="button" disabled>連続撮影</button><button id="referenceFrame" type="button" disabled>基準Aに保存</button><label class="check"><input id="stretchImage" type="checkbox">表示のコントラストを自動調整</label></div>
+      <p id="cameraStatus" class="camera-status" role="status">BLE接続後に撮影できます</p>
+      <div class="camera-layout">
+        <figure><figcaption>現在 B <span id="frameLabel">撮影待ち</span></figcaption><canvas id="sensorImage" width="440" height="440" role="img" aria-label="PMW3610が撮影した22×22ピクセルの拡大画像"></canvas></figure>
+        <figure><figcaption>基準 A <span id="referenceLabel">基準画像を保存できます</span></figcaption><canvas id="referenceImage" width="440" height="440" role="img" aria-label="基準Aとして保存したセンサー画像"></canvas></figure>
+        <div class="camera-numbers"><div class="table-scroll"><table><caption>画素値から計算 · 生データの範囲 0〜127</caption><thead><tr><th>項目</th><th>A</th><th>B</th><th>B−A</th></tr></thead><tbody id="imageMetrics"><tr><td colspan="4">撮影すると数値を表示します。</td></tr></tbody></table></div><canvas id="imageHistogram" width="512" height="100" role="img" aria-label="現在の画像Bの画素値ヒストグラム"></canvas><div class="histogram-label"><span>0 · 暗</span><span>127 · 明</span></div><div class="actions"><button id="exportFrame" type="button" disabled>画像と数値JSON</button><button id="exportPng" type="button" disabled>元画像PNG</button></div></div>
+      </div>
+      <p class="caption">球の表面を近赤外光で撮影した実画像です。撮影中はカーソル追跡を一時停止し、1枚ごとにセンサーをリセットして設定CPIを復元します。連続撮影は調整を見るために使い、低速・高速テストは撮影を止めて行ってください。</p>
+      <p class="caption">球・ケース高さをひとつ変えてA/B比較。コントラストσと隣接画素差は模様の強さ・細かさの目安で、追従性能そのものではありません。露光・表面・高さが影響します。自動調整は表示だけに適用し、数値とPNGは元の画素値で保存します。</p>
+    </section>
     <section class="live-grid" aria-label="ライブモニター">
       <article class="card">
         <div class="card-head"><h2>軌跡</h2><span id="coordinateLabel">入力待ち</span></div>
@@ -88,7 +101,7 @@
     <details class="help card"><summary>数値の読み方・調べた仕組み</summary>
       <p>SQUAL・露光は同じセンサー・同じ条件での相対比較に使います。全ての球に共通する合格値は設定していません。白・紫を同じ位置で比べ、次に同じ球でケース高さを変え、品質と軌跡が一緒に改善するか確認してください。</p>
       <p>方向差は4方向の移動量の最小÷最大、高速/低速は同じ回転量に対する出力量の比で評価します。手の動き、CPI、球の回転軸も影響するため、値だけで原因を断定せず3回のばらつきも見ます。通信欠落・入力切断があった測定は比較に使いません。</p>
-      <p>自作キーボード向けの<a href="https://keyball-link.shiroganelab.com/" target="_blank" rel="noopener">Keyball Link</a>・<a href="https://vial.rocks/" target="_blank" rel="noopener">Vial Web</a>の実機設定の流れと、<a href="https://docs.qmk.fm/features/rawhid" target="_blank" rel="noopener">QMK Raw HID</a>の機器固有プロトコルを調査。ReeLの既存較正機能に、<a href="https://developer.chrome.com/docs/capabilities/serial" target="_blank" rel="noopener">Web Serial</a>によるセンサー診断を組み合わせました。</p>
+      <p>自作キーボード向けの<a href="https://keyball-link.shiroganelab.com/" target="_blank" rel="noopener">Keyball Link</a>・<a href="https://vial.rocks/" target="_blank" rel="noopener">Vial Web</a>の実機設定の流れと、<a href="https://docs.qmk.fm/features/rawhid" target="_blank" rel="noopener">QMK Raw HID</a>の機器固有プロトコルを調査。ReeLの既存較正機能に、<a href="https://developer.chrome.com/docs/capabilities/serial" target="_blank" rel="noopener">Web Serial</a>と<a href="https://developer.chrome.com/docs/capabilities/bluetooth" target="_blank" rel="noopener">Web Bluetooth</a>による診断を組み合わせました。実画像は<a href="https://trackballs.eu/media/Nakabayashi/Digio2/PMW3610DM-SUDU.pdf" target="_blank" rel="noopener">PixArtのデータシート</a>のフレーム取得手順と画素配置（17・33ページ）に従います。</p>
     </details>
   </main>
   <footer class="shell">ReeL Trackball Lab <span>測定データをサーバーへ送信しません。</span></footer>

@@ -33,17 +33,12 @@ pub struct TransformingPointingDevice<S: PointingDriver> {
 
 impl<S: PointingDriver> Runnable for TransformingPointingDevice<S> {
     async fn run(&mut self) -> ! {
-        use rmk::embassy_futures::select::{Either, select};
-
         let mut cpi_subscriber = PointingSetCpiEvent::subscriber();
 
         loop {
-            match select(self.read_pointing_event(), cpi_subscriber.next_event()).await {
-                // Immediate publication evicts the oldest queued pointing
-                // event under backpressure, keeping sensor polling responsive.
-                Either::First(event) => publish_event(event),
-                Either::Second(event) => self.on_pointing_set_cpi_event(event).await,
-            }
+            // Only idle waits race CPI events; never cancel a sensor transaction or reset.
+            let event = self.read_pointing_event(&mut cpi_subscriber).await;
+            publish_event(event);
         }
     }
 }
@@ -120,6 +115,15 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             return;
         }
 
+        #[cfg(feature = "trackball-diagnostics")]
+        if rmk::ble::diagnostics::mode() == 2 {
+            self.accumulated_x = 0;
+            self.accumulated_y = 0;
+            self.pending_report_x = 0;
+            self.pending_report_y = 0;
+            self.transform = TrackballTransform::new();
+            self.gain = MotionGain::new();
+        }
         if let Ok(motion) = self.sensor.read_motion().await {
             self.accumulated_x = self.accumulated_x.saturating_add(i32::from(motion.dx));
             self.accumulated_y = self.accumulated_y.saturating_add(i32::from(motion.dy));
@@ -194,7 +198,10 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             || self.pending_report_y != 0
     }
 
-    async fn read_pointing_event(&mut self) -> PointingEvent {
+    async fn read_pointing_event(
+        &mut self,
+        cpi_subscriber: &mut <PointingSetCpiEvent as SubscribableEvent>::Subscriber,
+    ) -> PointingEvent {
         use rmk::embassy_futures::select::{Either, select};
 
         if self.last_poll == Instant::MIN {
@@ -252,7 +259,15 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
 
             // embassy-futures::select polls its first future first, so the
             // report deadline must be the first future here.
-            match select(report_wait, poll_wait).await {
+            let ready =
+                match select(cpi_subscriber.next_event(), select(report_wait, poll_wait)).await {
+                    Either::Second(ready) => ready,
+                    Either::First(event) => {
+                        self.on_pointing_set_cpi_event(event).await;
+                        continue;
+                    }
+                };
+            match ready {
                 Either::First(_) => {
                     self.last_report = Instant::now();
                     self.merge_accumulated_motion();

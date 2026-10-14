@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SensorLines, parseSensorLine, summarizeStroke, summarizeRun, comparisonIssues, quantile, csvCell, rawCsv } from "./trackball-diagnostics.mjs";
+import { SensorPackets, BleSensorConnection, bleService, frameMetrics, frameRgba, SensorLines, parseSensorLine, summarizeStroke, summarizeRun, comparisonIssues, quantile, csvCell, rawCsv } from "./trackball-diagnostics.mjs";
 
 test("USB fragments preserve signed counts and reject malformed sensor records", () => {
   const parser = new SensorLines();
@@ -69,4 +69,76 @@ test("CSV includes conditions and raw values while neutralizing text formulas", 
   assert.equal(csv.trim().split("\r\n").length, 13);
   assert.equal(csvCell(-2048), "-2048"); assert.equal(csvCell("a,b"), '"a,b"');
   assert.equal(quantile([null, 0, 10, 20, NaN], 0.5), 10);
+});
+
+const telemetry = new Uint8Array([84, 1, 7, 0, 0, 0, 160, 15, 0, 0, 255, 255, 0, 248, 42, 52, 18, 128, 64, 6]);
+function status(id, phase) { const b = new Uint8Array(20); b.set([83, 1, id, 0, phase]); return b; }
+function chunks(id, pixels) { return Array.from({ length: 35 }, (_, i) => {
+  const b = new Uint8Array(20), offset = i * 14; b.set([70, 1, id, 0, offset & 255, offset >>> 8]);
+  b.set(pixels.slice(offset, offset + 14), 6); return b;
+}); }
+
+test("BLE preserves the firmware wire fixture and unwraps microsecond clocks", () => {
+  const parser = new SensorPackets();
+  const padded = new Uint8Array(40); padded.set(telemetry, 10);
+  assert.deepEqual(parser.push(new DataView(padded.buffer, 10, 20)).sample,
+    { seq: 7, t: 4, dx: -1, dy: -2048, squal: 42, shutter: 4660, motion: 128, cpi: 1600 });
+  const next = telemetry.slice(), view = new DataView(next.buffer);
+  view.setUint32(2, 8, true); view.setUint32(6, 0xffffff00, true);
+  const a = parser.push(next).sample;
+  view.setUint32(2, 9, true); view.setUint32(6, 0x100, true);
+  const b = parser.push(next).sample;
+  assert.ok(Math.abs(b.t - a.t - 0.512) < 1e-6);
+  view.setUint32(2, 1, true); view.setUint32(6, 1000, true);
+  assert.equal(parser.push(next).sample.t, 1);
+  next[17] = 0; assert.equal(parser.push(next), null);
+  assert.equal(parser.push(new Uint8Array(19)), null);
+  next[17] = 128; view.setUint16(18, 201, true); assert.equal(parser.push(next), null);
+});
+
+test("only complete matching 484-pixel frames survive BLE chunk loss or corruption", () => {
+  const pixels = Uint8Array.from({ length: 484 }, (_, i) => i % 128), parser = new SensorPackets();
+  const packets = chunks(23, pixels);
+  parser.push(status(23, 1));
+  for (const packet of packets) assert.equal(parser.push(packet).kind, "progress");
+  const frame = parser.push(status(23, 2));
+  assert.equal(frame.kind, "frame"); assert.deepEqual(frame.pixels, pixels);
+  parser.push(status(23, 1)); for (const packet of packets.slice(1)) parser.push(packet);
+  assert.equal(parser.push(status(23, 2)).kind, "error");
+  parser.push(status(23, 1)); parser.push(packets[0]); assert.equal(parser.push(packets[0]), null);
+  assert.equal(parser.push(status(23, 2)).kind, "error");
+  parser.push(status(23, 1)); const corrupt = packets[0].slice(); corrupt[6] = 128;
+  assert.equal(parser.push(corrupt), null); assert.equal(parser.push(status(23, 2)).kind, "error");
+  parser.push(status(23, 1)); assert.equal(parser.push(status(23, 3)).kind, "error");
+  parser.push(status(23, 1)); assert.equal(parser.push(chunks(24, pixels)[0]), null);
+  assert.equal(parser.push(status(24, 2)).kind, "error");
+});
+
+test("frame contrast uses raw values and rendering follows the datasheet column map", () => {
+  const flat = new Uint8Array(484).fill(64);
+  assert.deepEqual(frameMetrics(flat), { mean: 64, sd: 0, gradient: 0, dark: 0, bright: 0 });
+  assert.equal(frameMetrics(new Uint8Array(484)).dark, 100);
+  const pixels = new Uint8Array(484); pixels[0] = 127; pixels[462] = 64; pixels[21] = 32; pixels[483] = 16;
+  const rgba = frameRgba(pixels);
+  assert.deepEqual(Array.from(rgba.slice(21 * 4, 22 * 4)), [255, 255, 255, 255]);
+  assert.equal(rgba[0], 129); assert.equal(rgba[(21 * 22 + 21) * 4], 64); assert.equal(rgba[21 * 22 * 4], 32);
+  assert.ok(frameMetrics(pixels).sd > 0); assert.ok(frameMetrics(pixels).gradient > 0);
+  assert.equal(frameRgba(flat, true)[0], 129);
+  assert.throws(() => frameMetrics([1])); assert.throws(() => frameRgba(new Uint8Array(484).fill(255)));
+});
+
+test("BLE client subscribes before starting, sends capture, and stops cleanly", async () => {
+  const writes = [], listeners = new Map(); let subscribed = false, seen = 0, disconnected = 0;
+  const command = { async writeValueWithResponse(b) { assert.ok(subscribed); writes.push(Array.from(b)); } };
+  const data = { addEventListener(k, fn) { listeners.set(k, fn); }, removeEventListener(k) { listeners.delete(k); }, async startNotifications() { subscribed = true; } };
+  const device = { addEventListener(k, fn) { listeners.set(k, fn); }, removeEventListener(k) { listeners.delete(k); },
+    gatt: { connected: false, async connect() { this.connected = true; return { async getPrimaryService(uuid) { assert.equal(uuid, bleService); return { async getCharacteristic(id) { return id.includes("8a01") ? command : data; } }; } }; }, disconnect() { this.connected = false; listeners.get("gattserverdisconnected")?.(); } } };
+  const connection = new BleSensorConnection(() => seen++, () => disconnected++);
+  await connection.connect({ async requestDevice(options) { assert.equal(options.filters[0].namePrefix, "ReeL"); assert.deepEqual(options.optionalServices, [bleService]); return device; } });
+  listeners.get("characteristicvaluechanged")({ target: { value: new DataView(telemetry.buffer) } });
+  await connection.setMode(2); await connection.close();
+  assert.equal(seen, 1); assert.equal(disconnected, 0); assert.equal(device.gatt.connected, false);
+  assert.deepEqual(writes, [[82, 84, 1, 1], [82, 84, 1, 2], [82, 84, 1, 0]]);
+  assert.equal(listeners.size, 0); await assert.rejects(() => connection.setMode(2));
+  const a = run(), b = run(); b.transport = "ble"; assert.equal(comparisonIssues(a, b).length, 1);
 });

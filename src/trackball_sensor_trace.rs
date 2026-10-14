@@ -25,14 +25,23 @@ impl<S: ErrorType> ErrorType for SensorTrace<S> {
 
 impl<S: SpiBus> SpiBus for SensorTrace<S> {
     async fn read(&mut self, words: &mut [u8]) -> Result<(), Self::Error> {
-        let burst = core::mem::take(&mut self.burst_pending);
+        let burst = core::mem::take(&mut self.burst_pending) && words.len() == 7;
         if burst {
             self.sequence = self.sequence.wrapping_add(1);
         }
         self.spi.read(words).await?;
         if burst {
             if let Some(sample) = decode_burst(words) {
-                // Failed reads and USB overflow leave sequence gaps; never wait for USB.
+                if rmk::ble::diagnostics::mode() == 1 {
+                    let packet = crate::trackball_diagnostic_data::motion_packet(
+                        &sample,
+                        self.sequence,
+                        embassy_time::Instant::now().as_micros() as u32,
+                        crate::trackball_camera::active_cpi(),
+                    );
+                    let _ = rmk::ble::diagnostics::PACKETS.try_send(packet);
+                }
+                // Failed reads and transport overflow leave sequence gaps; never wait for the host.
                 log::info!(
                     "RTB1,{},{},{},{},{},{},{}",
                     self.sequence,
