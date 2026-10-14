@@ -13,6 +13,8 @@ on:
       - "rust-toolchain.toml"
       - "tools/trackball-profiler.html"
       - "tools/test-trackball-profiler.js"
+      - "tools/trackball-diagnostics.*"
+      - "tools/test-trackball-diagnostics.mjs"
       - "tools/rotary-decoder-tests/**"
       - "vial.json"
   pull_request:
@@ -27,6 +29,8 @@ on:
       - "rust-toolchain.toml"
       - "tools/trackball-profiler.html"
       - "tools/test-trackball-profiler.js"
+      - "tools/trackball-diagnostics.*"
+      - "tools/test-trackball-diagnostics.mjs"
       - "tools/rotary-decoder-tests/**"
       - "vial.json"
   workflow_dispatch:
@@ -48,7 +52,9 @@ jobs:
       - uses: Swatinem/rust-cache@v2
 
       - name: Check trackball profiler JavaScript
-        run: node tools/test-trackball-profiler.js
+        run: |
+          node tools/test-trackball-profiler.js
+          node tools/test-trackball-diagnostics.mjs
 
       - name: Test calibration format and directional motion
         run: |
@@ -56,6 +62,8 @@ jobs:
           /tmp/calibration-data-tests
           rustc --edition 2024 --test src/motion_gain.rs -o /tmp/motion-gain-tests
           /tmp/motion-gain-tests
+          rustc --edition 2024 --test src/trackball_diagnostic_data.rs -o /tmp/trackball-data-tests
+          /tmp/trackball-data-tests
 
       - name: Test rotary decoder waveforms
         run: >-
@@ -80,10 +88,17 @@ jobs:
           cargo objcopy --release --locked --bin reel_left -- -O ihex reel_left.hex
           cargo hex-to-uf2 --input-path reel_left.hex --output-path reel_left.uf2 --family nrf52840
 
+      - name: Build right sensor diagnostics firmware
+        run: |
+          cargo build --release --locked --bin reel_right --no-default-features --features trackball-diagnostics
+          cargo objcopy --release --locked --bin reel_right --no-default-features --features trackball-diagnostics -- -O ihex reel_right_diagnostics.hex
+          cargo hex-to-uf2 --input-path reel_right_diagnostics.hex --output-path reel_right_diagnostics.uf2 --family nrf52840
+
       - uses: actions/upload-artifact@v4
         with:
           name: reel-rmk-firmware
           path: |
             reel_left.uf2
             reel_right.uf2
+            reel_right_diagnostics.uf2
           if-no-files-found: error

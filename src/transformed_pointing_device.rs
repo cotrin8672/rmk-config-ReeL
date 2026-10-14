@@ -50,7 +50,11 @@ impl<S: PointingDriver> Runnable for TransformingPointingDevice<S> {
 
 impl<S: PointingDriver> TransformingPointingDevice<S> {
     const MAX_INIT_RETRIES: u8 = 3;
-    const DEFAULT_POLL_INTERVAL_US: u64 = 500;
+    const DEFAULT_POLL_INTERVAL_US: u64 = if cfg!(feature = "trackball-diagnostics") {
+        4000
+    } else {
+        500
+    };
 
     pub fn with_report_hz(id: u8, sensor: S, report_hz: u16) -> Self {
         let report_interval = Duration::from_hz(report_hz as u64);
@@ -112,7 +116,7 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             return;
         }
 
-        if !self.sensor.motion_pending() {
+        if !cfg!(feature = "trackball-diagnostics") && !self.sensor.motion_pending() {
             return;
         }
 
@@ -226,7 +230,15 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
             };
 
             let poll_wait = async {
-                if let Some(gpio) = self.sensor.motion_gpio() {
+                if cfg!(feature = "trackball-diagnostics") {
+                    // Include stationary quality readings; this mode is a separate UF2.
+                    Timer::after(
+                        self.poll_interval
+                            .checked_sub(self.last_poll.elapsed())
+                            .unwrap_or(Duration::MIN),
+                    )
+                    .await;
+                } else if let Some(gpio) = self.sensor.motion_gpio() {
                     let _ = gpio.wait_for_low().await;
                 } else {
                     Timer::after(
