@@ -1,5 +1,5 @@
 param(
-    [string]$OutputPath = (Join-Path $env:TEMP ('ReeL-device-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')),
+    [string]$OutputPath = (Join-Path ([IO.Path]::GetTempPath()) ('ReeL-device-' + (Get-Date -Format 'yyyyMMdd-HHmmss') + '.log')),
     [ValidateRange(1, 86400)][int]$Seconds = 1800,
     [switch]$SelfTest
 )
