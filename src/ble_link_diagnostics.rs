@@ -2,8 +2,8 @@
 
 use core::fmt::Write;
 
-use embassy_nrf::peripherals::USBD;
 use embassy_nrf::usb::Driver;
+use embassy_nrf::usb::vbus_detect::HardwareVbusDetect;
 use embassy_time::{Instant, Timer};
 use embassy_usb_logger::{DummyHandler, LoggerState, UsbLogger};
 use rmk::core_traits::Runnable;
@@ -36,12 +36,12 @@ pub fn init(reset_reason: u32) {
 }
 
 pub struct DiagnosticUsb {
-    driver: Option<Driver<'static, USBD>>,
+    driver: Option<Driver<'static, HardwareVbusDetect>>,
     reset_reason: u32,
 }
 
 impl DiagnosticUsb {
-    pub fn new(driver: Driver<'static, USBD>, reset_reason: u32) -> Self {
+    pub fn new(driver: Driver<'static, HardwareVbusDetect>, reset_reason: u32) -> Self {
         Self {
             driver: Some(driver),
             reset_reason,
