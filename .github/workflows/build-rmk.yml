@@ -14,6 +14,7 @@ on:
       - "tools/trackball-profiler.html"
       - "tools/test-trackball-profiler.js"
       - "tools/rotary-decoder-tests/**"
+      - "tools/collect-ble-link-logs.ps1"
       - "vial.json"
   pull_request:
     paths:
@@ -28,6 +29,7 @@ on:
       - "tools/trackball-profiler.html"
       - "tools/test-trackball-profiler.js"
       - "tools/rotary-decoder-tests/**"
+      - "tools/collect-ble-link-logs.ps1"
       - "vial.json"
   workflow_dispatch:
 
@@ -49,6 +51,10 @@ jobs:
 
       - name: Check trackball profiler JavaScript
         run: node tools/test-trackball-profiler.js
+
+      - name: Check BLE log collector
+        shell: pwsh
+        run: ./tools/collect-ble-link-logs.ps1 -SelfTest
 
       - name: Test calibration format and directional motion
         run: |
@@ -80,10 +86,19 @@ jobs:
           cargo objcopy --release --locked --bin reel_left -- -O ihex reel_left.hex
           cargo hex-to-uf2 --input-path reel_left.hex --output-path reel_left.uf2 --family nrf52840
 
+      - name: Build right BLE link logger
+        run: |
+          cargo build --release --locked --bin reel_right --no-default-features --features ble-link-diagnostics
+          cargo objcopy --release --locked --bin reel_right --no-default-features --features ble-link-diagnostics -- -O ihex reel_right_ble_logs.hex
+          cargo hex-to-uf2 --input-path reel_right_ble_logs.hex --output-path reel_right_ble_logs.uf2 --family nrf52840
+
       - uses: actions/upload-artifact@v4
         with:
           name: reel-rmk-firmware
           path: |
             reel_left.uf2
             reel_right.uf2
+            reel_right_ble_logs.uf2
+            tools/collect-ble-link-logs.ps1
+            tools/BLE-LINK-LOGS.txt
           if-no-files-found: error

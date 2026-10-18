@@ -4,8 +4,16 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT OR Apache-2.0"
 
+[features]
+default = ["firmware-defmt"]
+firmware-defmt = ["rmk/defmt"]
+ble-link-diagnostics = ["rmk/log", "dep:log", "dep:embassy-usb-logger"]
+
 [dependencies]
-rmk = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172", features = [
+log = { version = "0.4", optional = true, features = ["max_level_info"] }
+embassy-usb-logger = { version = "0.6", optional = true }
+rmk = { git = "https://github.com/HaoboGu/rmk.git", rev = "936a2a828fddc195d20e42bd952119cd3afa8172", default-features = false, features = [
+    "storage", "vial", "vial_lock", "watchdog",
     "nrf52840_ble",
     "use_1m_phy",
     "split",

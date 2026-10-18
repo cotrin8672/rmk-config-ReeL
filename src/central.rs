@@ -4,6 +4,8 @@
 mod keymap;
 #[macro_use]
 mod macros;
+#[cfg(feature = "ble-link-diagnostics")]
+mod ble_link_diagnostics;
 mod calibration_config;
 mod calibration_data;
 mod lcd_dirty_lines;
@@ -55,6 +57,7 @@ use rmk::types::action::Action;
 use rmk::types::fork::{Fork, StateBits};
 use rmk::types::keycode::{HidKeyCode, KeyCode};
 use rmk::types::morse::MorseMode;
+#[cfg(not(feature = "ble-link-diagnostics"))]
 use rmk::usb::UsbTransport;
 use rmk::watchdog::Nrf52Watchdog;
 use rmk::{
@@ -140,6 +143,8 @@ fn ble_addr() -> [u8; 6] {
 
 #[embassy_executor::main]
 async fn main(spawner: Spawner) {
+    #[cfg(feature = "ble-link-diagnostics")]
+    let reset_reason = ble_link_diagnostics::take_reset_reason();
     info!("Starting ReeL right (RMK central)");
 
     let mut nrf_config = embassy_nrf::config::Config::default();
@@ -148,6 +153,8 @@ async fn main(spawner: Spawner) {
     nrf_config.dcdc.reg0 = true;
     nrf_config.dcdc.reg1 = true;
     let p = embassy_nrf::init(nrf_config);
+    #[cfg(feature = "ble-link-diagnostics")]
+    ble_link_diagnostics::init(reset_reason);
     let _charge_current = Output::new(p.P0_13, Level::Low, OutputDrive::Standard);
 
     let mut lcd_spi_config = spim::Config::default();
@@ -364,7 +371,10 @@ async fn main(spawner: Spawner) {
     let mut auto_mouse_layer = AutoMouseLayerRunner::new(&keymap);
 
     let peripheral_addrs = storage.read_peripheral_addresses::<1>().await;
+    #[cfg(not(feature = "ble-link-diagnostics"))]
     let mut usb_transport = UsbTransport::new(usb_driver, rmk_config.device_config);
+    #[cfg(feature = "ble-link-diagnostics")]
+    let mut usb_transport = ble_link_diagnostics::DiagnosticUsb::new(usb_driver, reset_reason);
     let mut ble_transport = BleTransport::new(&stack, rmk_config).await;
     let mut watchdog = Nrf52Watchdog::default_runner(p.WDT);
 

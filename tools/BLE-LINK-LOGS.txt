@@ -1,0 +1,40 @@
+ReeL BLE disconnect and reset capture
+
+Baseline: 3037316, the existing 1 Mbps comparison firmware. RMK/SDC revisions,
+connection intervals, sensor polling, split transport and stored configuration
+are unchanged. Only the right half needs the diagnostic image.
+
+Flash reel_right_ble_logs.uf2 to the RIGHT XIAO bootloader, then leave its USB
+data cable connected. This image exposes only the existing Embassy USB CDC
+logger (VID C0DE / PID CAFE); keyboard/mouse input still uses Bluetooth.
+It does not expose USB HID, so a working USB keyboard cannot mask a BLE fault.
+The ordinary BLE GATT table is unchanged; this does not require re-pairing.
+
+Capture on Windows:
+  pwsh -NoProfile -File tools/collect-ble-link-logs.ps1
+
+The collector writes host timestamps, reopens the serial port after MCU resets,
+and stops after 30 minutes. It does not change Windows settings. Use -OutputPath
+to choose a log file, or -Seconds to choose a shorter capture.
+
+BLD1,<uptime_ms>,<level>,<message> records include:
+  BOOT: build identity and the raw nRF52840 POWER.RESETREAS register, captured
+        and cleared before HAL/watchdog initialization.
+  HEARTBEAT: uptime and repeated reset flags every two seconds.
+  Existing RMK/trouble logs: host/split disconnection reasons, PHY/connection
+        parameter events, HID suspend requests, sleep/wake and BLE errors.
+
+RESETREAS bits: bit 0 reset pin; bit 1 watchdog; bit 2 software reset;
+bit 3 CPU lockup; bit 16 GPIO wake from System OFF; bit 17 LPCOMP wake;
+bit 18 debug wake; bit 19 NFC wake; bit 20 VBUS wake.
+Zero flags may indicate power-on/brownout, or a bootloader clearing the flags;
+use BOOT records and uptime restart to establish whether a restart occurred.
+A watchdog flag identifies the reset mechanism, not the original hang cause.
+
+After one fault, compare the PC HCI timestamp against the device disconnect,
+heartbeat continuity and BOOT/reset records. A quiet log without a reproduced
+fault is not evidence of a fix. USB power/logging changes test conditions;
+confirm the final fix with ordinary firmware on battery as well.
+
+Restore reel_right.uf2 from the SAME artifact to return to the original 1 Mbps
+comparison behavior. Do not flash the left image for this diagnostic capture.
