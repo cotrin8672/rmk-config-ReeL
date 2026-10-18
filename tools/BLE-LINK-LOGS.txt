@@ -1,14 +1,18 @@
 ReeL BLE disconnect and reset capture
 
 Baseline: 3037316, the existing 1 Mbps comparison firmware. RMK/SDC revisions,
-connection intervals, sensor polling, split transport and stored configuration
-are unchanged. Only the right half needs the diagnostic image.
+connection intervals, sensor polling and split transport are unchanged.
+Only the right half needs the diagnostic image.
 
 Flash reel_right_ble_logs.uf2 to the RIGHT XIAO bootloader, then leave its USB
 data cable connected. This image exposes only the existing Embassy USB CDC
 logger (VID C0DE / PID CAFE); keyboard/mouse input still uses Bluetooth.
 It does not expose USB HID, so a working USB keyboard cannot mask a BLE fault.
-The ordinary BLE GATT table is unchanged; this does not require re-pairing.
+The ordinary BLE GATT table is unchanged. However, this RMK revision generates
+a new storage build hash from the build time and erases its settings when that
+hash changes. Flashing a new build can therefore erase device-side bonds and
+Vial settings. Preserve a device flash backup before replacing a working build.
+An initial missing-key error after flashing is separate from the original fault.
 
 Capture on Windows:
   pwsh -NoProfile -File tools/collect-ble-link-logs.ps1
@@ -36,5 +40,7 @@ heartbeat continuity and BOOT/reset records. A quiet log without a reproduced
 fault is not evidence of a fix. USB power/logging changes test conditions;
 confirm the final fix with ordinary firmware on battery as well.
 
-Restore reel_right.uf2 from the SAME artifact to return to the original 1 Mbps
-comparison behavior. Do not flash the left image for this diagnostic capture.
+The separately saved restore-1m/reel_right.uf2 is the exact original 3037316
+artifact. A freshly rebuilt normal image has a different storage hash. Restoring
+either image alone does not restore erased device settings or bonds; preserve
+the flash backup as well. Do not flash the left image for this diagnostic capture.
