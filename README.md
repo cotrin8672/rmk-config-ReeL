@@ -57,10 +57,18 @@ matrix or key geometry changes, review and update this file explicitly.
 
 ### Sensor diagnostics and condition comparison
 
-Open `tools/trackball-diagnostics.html` through a local HTTP server in desktop
-Chrome/Edge, or use the hosted ReeL Trackball Lab. This complements the existing
-calibration console: stabilize optical tracking and compare hardware positions
-before fitting angle and sensitivity corrections.
+Start the local page from the repository root (Python 3 must be on PATH):
+
+```powershell
+powershell -NoProfile -File .\tools\start-trackball-lab.ps1
+```
+
+Open <http://127.0.0.1:4321/trackball-diagnostics.html> in desktop Chrome/Edge.
+The script reuses an existing server or starts one in the background, independent
+of the chat terminal. Run it again after a PC restart. No hosting or login is
+required. This complements the existing calibration console: stabilize optical
+tracking and compare hardware positions before fitting angle and sensitivity
+corrections.
 
 The page offers live raw displacement, SQUAL and shutter plots; hands-off rest
 measurement; three strokes in each of four directions at slow or fast speeds;
