@@ -150,7 +150,8 @@ body{grid-template-rows:32px minmax(0,1fr)}
 .connection .primary{grid-column:auto}
 #conditions{gap:4px; padding:5px}
 .measure-body{gap:5px; padding:5px}
-.test-instruction,.shortcuts{font-size:9px}.shortcuts{display:none}
+.test-instruction,.shortcuts{font-size:9px}
+.shortcuts{display:none}
 .card-head{height:25px; min-height:25px}
 .camera-layout{padding:4px 6px}
 .camera-numbers th,.camera-numbers td{padding:1px 3px}
@@ -160,4 +161,44 @@ body{grid-template-rows:32px minmax(0,1fr)}
 .result-footer p{-webkit-line-clamp:1}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto}
+}
+.guide-steps{list-style:none;padding:0;margin:0;display:flex;flex-wrap:wrap;gap:3px;font-size:9px;line-height:1.6}
+.guide-steps li{padding:1px 4px;border-radius:3px;background:#eef2ee;color:#74847e}
+.guide-steps .active{background:#18343e;color:#fff}
+.guide-steps .done{color:#087d77;background:#e0eee7}
+.pace-guide{position:relative;width:100%;height:66px;flex-shrink:0}
+.pace-track{position:absolute;left:50%;top:50%;background:#c7d7cf;width:130px;height:2px;transform:translate(-50%,-50%)}
+.vertical .pace-track{width:2px;height:52px}
+.rest .pace-track{display:none}
+.pace-dot{position:absolute;left:50%;top:50%;width:12px;height:12px;border:2px solid #fff;border-radius:50%;background:#087d77;box-shadow:0 0 0 2px #087d7730;transform:translate(-50%,-50%);will-change:transform}
+.pace-guide #directionSymbol{position:absolute;right:3px;top:24px;font-size:18px;color:#63777d}
+#paceLabel{font-size:11px;font-variant-numeric:tabular-nums}
+#reportDialog{width:min(1240px,96vw);max-height:92dvh}
+.report-content{font-size:11px}
+.report-content h1{font-size:18px}
+.report-content h2{font-size:14px;margin:20px 0 6px}
+.report-content p{margin:8px 0}
+.report-content table{margin:8px 0;font-size:10px}
+.report-content th,.report-content td{white-space:normal;padding:3px;border:1px solid #d7dfdc;min-width:35px}
+.report-content thead{font-weight:650;background:#edf1ee}
+.report-content svg{width:100%;max-height:160px;display:block}
+.report-content .warning{color:#a52d22}
+.report-content .muted{color:#63777d;font-size:10px}
+.result-footer .actions{gap:3px}
+.result-footer button{padding-inline:4px}
+@media(max-height:650px) and (min-width:821px){.pace-guide{height:52px}
+.vertical .pace-track{height:48px}
+.guide-steps{font-size:8px}
+.test-instruction{display:none}
+}
+.connection .actions{grid-template-columns:1fr auto auto}
+.connection .primary{grid-column:auto}
+.guide-steps{display:flex;gap:4px;height:4px;flex-shrink:0}
+.guide-steps li{font-size:0;line-height:0;padding:0;height:4px;flex:1}
+.guide-steps .active{background:#087d77}
+.guide-steps .done{background:#97bfac}
+#captureArea{min-height:150px}
+.measurement-actions button{font-size:11px;padding-inline:5px}
+.measurement-actions .primary{grid-column:1/-1}
+@media(max-height:650px) and (min-width:821px){#captureArea{min-height:125px}
 }

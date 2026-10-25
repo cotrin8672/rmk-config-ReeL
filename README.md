@@ -70,21 +70,43 @@ required. This complements the existing calibration console: stabilize optical
 tracking and compare hardware positions before fitting angle and sensitivity
 corrections.
 
-The page offers live raw displacement, SQUAL and shutter plots; hands-off rest
-measurement; three strokes in each of four directions at slow or fast speeds;
-condition histories and A/B comparisons; raw CSV/result JSON exports; and a
-22x22 sensor-image viewer with automatic live capture, reference image A,
-raw brightness/contrast/neighbor-difference statistics, PNG and image JSON.
-Live image capture must be explicitly started: PMW3610 cannot track motion
-while capturing/resetting, so continuous capture makes normal cursor use
-unreliable. Stop live capture to restore uninterrupted navigation.
+One guided run replaces the four test selectors: hands-off rest (5 seconds),
+vertical slow, vertical fast, horizontal slow, then horizontal fast. For each
+movement stage, place the finger at the upper/left end of its comfortable
+range and press Space. A dot previews the pace before starting; after a
+3-second countdown, follow its motion through five full reciprocations.
+The dot crosses the same distance in 2 seconds for slow and 0.5 seconds for
+fast, with a 0.4-second hold at each end. This is a timing cue for finger
+movement, not a target for the mouse cursor. Each stage ends automatically.
+R repeats the current stage (or returns to the previous stage while waiting),
+and Esc aborts. Images stay paused throughout measurement.
+
+The cue clock also defines all ten one-way measurement windows. Opposite
+strokes are analyzed separately, and zero-output windows remain in the report.
+The summary shows up/down and left/right output balance, repeatability,
+fast/slow output ratios, normalized sideways jitter and stationary drift.
+The detailed report opens automatically at completion and can be saved as a
+standalone HTML document or printed. It includes conditions, cue timings,
+every one-way stroke, quality/exposure values, transfer problems and plots.
+History keeps the full statistical report and 128-bin plots; raw samples
+remain available for the current run as CSV/JSON and should be saved before
+starting another run. Old single-test histories remain available as JSON;
+comparisons use runs collected with the new guided procedure.
+
+Record the ball, case position and height change relative to the baseline.
+USB telemetry reads back actual CPI; browser input records the entered CPI.
+The guide does not measure actual ball rotation or physical speed: ratios
+remain hand-operated comparisons, not a calibrated counts/mm or dropout rate.
+Keep wrist placement, finger range, ball and CPI fixed while changing case
+position or distance. Browser pointer input and explicitly labeled synthetic
+demo data remain available; they do not substitute for sensor diagnostics.
+
 The desktop console keeps images, all three plots, measurements and comparison
-on one viewport (verified at 1280x720 and 1265x712); narrow screens stack panels.
-Verification steps and history open in dialogs.
-Record the ball, case position, CPI and a repeatable surface travel. Input CPI
-and travel are notes; USB telemetry reads back actual CPI and records it for tests. Browser pointer
-input and explicitly labeled synthetic demo data are available as separate
-sources; neither substitutes for sensor diagnostics.
+on one viewport; narrow screens stack panels. History, instructions and the
+detailed report use dialogs. Image capture is manual: PMW3610 cannot track
+motion while capturing/resetting. Stop live capture to restore uninterrupted
+navigation. The image viewer retains A/B references, raw brightness/contrast
+statistics, PNG and frame JSON exports.
 
 For direct sensor data, flash **only the right half** with
 `reel_right_usb_diagnostics.uf2`. Unplug/replug USB, open the local page directly
@@ -131,7 +153,7 @@ Selecting **ライブ開始** requests the next frame after receiving a real
 navigation sample; the graphs retain
 history and break their lines across intentional capture pauses. Displayed
 image FPS measures completed captures, including transfer and recovery.
-Selecting **測定を準備** stops live capture and waits for navigation to resume
+Selecting **測定を開始** stops live capture and waits for navigation to resume
 before recording. Camera and movement tests are mutually exclusive.
 Hardware pins, split roles, keyboard Bluetooth and calibration
 flash formats are unchanged. Normal builds retain interrupt-driven polling.

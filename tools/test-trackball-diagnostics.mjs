@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SensorPackets, UsbSensorConnection, decodeUsbReport, frameMetrics, frameRgba, SensorLines, parseSensorLine, summarizeStroke, summarizeRun, comparisonIssues, quantile, csvCell, rawCsv } from "./trackball-diagnostics.mjs";
+import { guidedSteps, guidePhase, guideDuration, GUIDE_COUNTDOWN_MS, analyzeGuidedStage, summarizeGuidedRun, guidedReport, SensorPackets, UsbSensorConnection, decodeUsbReport, frameMetrics, frameRgba, SensorLines, parseSensorLine, summarizeStroke, summarizeRun, comparisonIssues, quantile, csvCell, rawCsv } from "./trackball-diagnostics.mjs";
 
 test("USB fragments preserve signed counts and reject malformed sensor records", () => {
   const parser = new SensorLines();
@@ -199,7 +199,7 @@ test("USB connection carries a complete frame through batched responses", async 
 test("live images pause for recording, Escape restores tracking, and USB never auto-captures", async () => {
   const { readFile } = await import("node:fs/promises");
   const { runInNewContext } = await import("node:vm");
-  let now = 0, nextId = 0;
+  let now = 0, nextId = 0, timerJitter = false, jitterBeat = 0, uuidCounter = 0;
   const timers = new Map();
   const schedule = (fn, delay, repeat = false) => {
     const id = ++nextId; timers.set(id, { fn, due: now + delay, repeat: repeat ? delay : 0 }); return id;
@@ -210,7 +210,7 @@ test("live images pause for recording, Escape restores tracking, and USB never a
       const next = [...timers].sort((a, b) => a[1].due - b[1].due)[0];
       if (!next || next[1].due > end) break;
       const [id, timer] = next; now = timer.due;
-      if (timer.repeat) timer.due += timer.repeat; else timers.delete(id);
+      if (timer.repeat) timer.due += timer.repeat + (timerJitter && timer.repeat === 16 ? (++jitterBeat % 2 ? -7 : 7) : 0); else timers.delete(id);
       timer.fn(); await Promise.resolve();
     }
     now = end; await Promise.resolve();
@@ -222,6 +222,7 @@ test("live images pause for recording, Escape restores tracking, and USB never a
       addEventListener: (kind, fn) => handlers.set(kind, fn), fire: kind => handlers.get(kind)?.({}),
       append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; },
       getContext: () => context, reportValidity: () => true, focus() {},
+      showModal() { this.open = true; }, close() { this.open = false; },
       get firstElementChild() { return this.children[0]; }
     };
     context.drawImage = () => e.paints++;
@@ -229,8 +230,8 @@ test("live images pause for recording, Escape restores tracking, and USB never a
   }
   const html = await readFile(new URL("./trackball-diagnostics.html", import.meta.url), "utf8");
   const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], element()]));
-  for (const [id, value] of Object.entries({protocol:"slow", cpi:"1600", travel:"10", conditionName:"UI test", ball:"purple", position:"0"})) elements[id].value = value;
-  elements.conditions.elements = [elements.conditionName, elements.ball, elements.position, elements.cpi, elements.travel, elements.settingNote];
+  for (const [id, value] of Object.entries({cpi:"1600", heightOffset:"0", conditionName:"UI test", ball:"purple", position:"0"})) elements[id].value = value;
+  elements.conditions.elements = [elements.conditionName, elements.ball, elements.position, elements.cpi, elements.heightOffset, elements.settingNote];
   elements.captureBar.append(element());
   const documentHandlers = new Map();
   const document = { getElementById: id => { assert.ok(elements[id], id); return elements[id]; }, createElement: element, querySelectorAll: () => [], addEventListener:(kind,fn)=>documentHandlers.set(kind,fn) };
@@ -239,7 +240,8 @@ test("live images pause for recording, Escape restores tracking, and USB never a
   runInNewContext(source.replace(/^export /gm, ""), {
     document, window: {devicePixelRatio:1, isSecureContext:true, addEventListener() {}}, performance:{now:()=>now},
     navigator:{hid:usb.hid}, Uint8Array, DataView,
-    localStorage:{getItem:()=>null,setItem(){}}, crypto:{randomUUID:()=>"ui-test"}, ImageData:class {},
+    localStorage:{getItem:()=>null,setItem(){}}, crypto:{randomUUID:()=>"ui-test-" + (++uuidCounter)}, ImageData:class {},
+    requestAnimationFrame:fn=>schedule(()=>fn(now),16), cancelAnimationFrame:id=>timers.delete(id),
     setTimeout:(fn,ms)=>schedule(fn,ms), clearTimeout:id=>timers.delete(id),
     setInterval:(fn,ms)=>schedule(fn,ms,true), clearInterval:id=>timers.delete(id)
   });
@@ -258,13 +260,102 @@ test("live images pause for recording, Escape restores tracking, and USB never a
   assert.equal(elements.continuous.disabled, true);
   assert.equal(elements.trackingMode.textContent, "連続追跡");
   const paints = elements.sensorImage.paints;
-  await elements.stroke.fire("click"); await tick(100); await elements.stroke.fire("click"); await tick(500);
+  assert.equal(elements.stroke.disabled, true, "rest measurement starts automatically");
+  await tick(guideDuration(guidedSteps[0]) + 20);
+  timerJitter = true;
+  for (const step of guidedSteps.slice(1)) {
+    assert.ok(elements.progress.textContent.includes(step.label));
+    assert.equal(elements.stroke.disabled, false);
+    await elements.stroke.fire("click"); await tick(guideDuration(step) + 20);
+  }
+  assert.equal(elements.progress.textContent, "5/5 完了");
+  assert.equal(elements.reportDialog.open, true, "detailed report opens after all stages");
   assert.equal(elements.sensorImage.paints, paints, "movement measurement does not restart capture");
-  assert.equal(elements.directionResults.children[0].children[1].textContent, "1 / 3");
+  assert.equal(elements.directionResults.children.length, 4);
+  assert.equal(elements.directionResults.children[0].children[6].textContent, "5/5");
   assert.equal(elements.exportRaw.disabled, false);
+  assert.equal(elements.openReport.disabled, false);
+  elements.reportDialog.close(); elements.conditionName.value = "UI B"; elements.heightOffset.value = "0.1";
+  await elements.prepare.fire("click"); await tick(guideDuration(guidedSteps[0]) + 20);
+  for (const step of guidedSteps.slice(1)) {
+    await elements.stroke.fire("click"); await tick(guideDuration(step) + 20);
+  }
+  assert.equal(elements.progress.textContent, "5/5 完了");
+  assert.equal(elements.comparisonResults.children.length, 9, "two guided case runs compare without mixing old protocols");
+  assert.equal(elements.comparisonNote.textContent, "");
   await elements.connectSensor.fire("click"); await new Promise(resolve => setImmediate(resolve)); await tick(300);
   assert.equal(elements.continuous.textContent, "ライブ開始", "USB must not start camera capture automatically");
   assert.equal(usb.writes.some(p => p[3] === 2), false, "navigation stays uninterrupted after USB connection");
   assert.equal(elements.trackingMode.textContent, "連続追跡");
   const closing = elements.connectSensor.fire("click"); await tick(10); await closing;
+});
+
+
+function guidedSamples(step, {zero = false, loss = false} = {}) {
+  const samples = []; let previous = guidePhase(step, 0).position;
+  for (let t = 0; t < guideDuration(step); t += 4) {
+    const position = guidePhase(step, t).position, delta = zero ? 0 : (position - previous) * 500; previous = position;
+    samples.push({t,dx:delta*0.6,dy:delta*0.8,squal:zero?0:40,shutter:120,seq:t/4,motion:delta?128:0,lost:loss&&t===4000?2:0});
+  }
+  return samples;
+}
+function guidedRun(zero = false) {
+  const stages = guidedSteps.map(step => analyzeGuidedStage(step, guidedSamples(step,{zero})));
+  return {id:"guided-test",date:"2026-10-25T00:00:00.000Z",protocol:"guided",source:"sensor",transport:"usb-hid",complete:true,unadjusted:null,
+    conditions:{name:"purple 0.1 mm",ball:"purple",position:"baseline",offsetMm:0.1,cpi:1600,travel:null,note:"fixed"},stages,strokes:stages.flatMap(s=>s.strokes)};
+}
+test("the visible hint and measurement share a clock, path and exact 4x pace change", () => {
+  const slow=guidedSteps[1], fast=guidedSteps[2];
+  assert.equal(slow.moveMs/fast.moveMs,4);
+  for(const step of [slow,fast]) {
+    assert.equal(guidePhase(step,0).countdown,3);
+    assert.equal(guidePhase(step,GUIDE_COUNTDOWN_MS).direction,2);
+    assert.equal(guidePhase(step,GUIDE_COUNTDOWN_MS).position,-1);
+    assert.ok(Math.abs(guidePhase(step,GUIDE_COUNTDOWN_MS+step.moveMs/2).position)<1e-12);
+    assert.equal(guidePhase(step,GUIDE_COUNTDOWN_MS+step.moveMs).position,1);
+    assert.equal(guidePhase(step,GUIDE_COUNTDOWN_MS+step.moveMs).holding,true);
+    assert.equal(guidePhase(step,GUIDE_COUNTDOWN_MS+step.moveMs+step.holdMs).direction,3);
+    assert.equal(guidePhase(step,guideDuration(step)-1).done,false);
+    assert.equal(guidePhase(step,guideDuration(step)).done,true);
+  }
+  assert.throws(()=>guidePhase(slow,-1));
+});
+test("reciprocation preserves all ten one-way outputs instead of cancelling them", () => {
+  const result=guidedRun(), summary=summarizeGuidedRun(result);
+  for(const stage of result.stages.slice(1)) {
+    assert.equal(stage.strokes.length,10);
+    assert.ok(stage.total.net<0.001);
+    assert.ok(stage.strokes.every(s=>Math.abs(s.metrics.net-1000)<0.001));
+  }
+  for(const g of summary.groups){assert.equal(g.slow.count,5);assert.equal(g.fast.count,5);assert.ok(Math.abs(g.fastRatio-1)<1e-9);}
+  assert.ok(Math.abs(summary.verticalBalance-1)<1e-9);
+  assert.ok(Math.abs(summary.horizontalBalance-1)<1e-9);
+  const lost=analyzeGuidedStage(guidedSteps[1],guidedSamples(guidedSteps[1],{loss:true}),"USB loss");
+  assert.equal(lost.lost,2);assert.equal(lost.strokes[0].invalidReason,"USB loss");
+});
+test("no-output strokes remain visible and endpoint pauses are excluded from movement gap", () => {
+  const result=guidedRun(true), summary=summarizeGuidedRun(result);
+  const stage=result.stages[1];
+  assert.equal(stage.strokes.length,10);assert.equal(stage.strokes[0].metrics.net,0);
+  assert.equal(stage.strokes[0].movingGapMs,2000);
+  assert.equal(stage.strokes[0].metrics.gapMs,2400);
+  assert.equal(summary.verticalBalance,null);assert.equal(summary.minFastRatio,null);
+  assert.ok(summary.issues.some(s=>s.includes("出力0")));
+  const stopped=analyzeGuidedStage(guidedSteps[1],guidedSamples(guidedSteps[1]).filter(s=>s.t<4000),"cancelled",4000);
+  assert.equal(stopped.strokes.length,1);assert.equal(stopped.strokes[0].endMs,4000);
+  assert.equal(stopped.strokes[0].invalidReason,"cancelled");
+});
+test("guided report and CSV contain reproducible cue windows, conditions and safe user text", () => {
+  const data=guidedRun();data.conditions.name='<script>alert("x")</script>';data.conditions.note='=HYPERLINK("x")';
+  data.stages.forEach((stage,i)=>stage.samples=guidedSamples(guidedSteps[i]));
+  const report=guidedReport(data).document, csv=rawCsv(data);
+  assert.ok(report.includes("&lt;script&gt;"));assert.ok(!report.includes('<script>'));
+  assert.ok(report.includes("端点保持"));assert.ok(report.includes("球の実回転量・速度は未計測"));
+  assert.ok(report.includes("高さ差 mm"));assert.ok(report.includes("高速/低速"));
+  assert.ok(csv.startsWith("\ufeff"));assert.ok(csv.includes("cue_direction"));
+  assert.ok(csv.includes('"countdown"'));assert.ok(csv.includes("'="));
+  assert.ok(csv.trim().split("\r\n").length>1000);
+  const saved={...data,stages:data.stages.map(({samples,...stage})=>stage)};
+  assert.ok(guidedReport(saved).document.includes("<svg"),"history retains detail and plots without raw samples");
+  assert.ok(comparisonIssues(data,run()).some(s=>s.includes("測定手順")));
 });
