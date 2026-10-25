@@ -194,3 +194,77 @@ test("USB connection carries a complete frame through batched responses", async 
   assert.ok(frame);assert.equal(frame.id,23);assert.equal(parser.invalid,0);
   assert.deepEqual(frame.pixels,Uint8Array.from({length:484},(_,i)=>i%128));
 });
+
+
+test("live images pause for recording, Escape restores tracking, and USB never auto-captures", async () => {
+  const { readFile } = await import("node:fs/promises");
+  const { runInNewContext } = await import("node:vm");
+  let now = 0, nextId = 0;
+  const timers = new Map();
+  const schedule = (fn, delay, repeat = false) => {
+    const id = ++nextId; timers.set(id, { fn, due: now + delay, repeat: repeat ? delay : 0 }); return id;
+  };
+  async function tick(ms) {
+    const end = now + ms;
+    for (;;) {
+      const next = [...timers].sort((a, b) => a[1].due - b[1].due)[0];
+      if (!next || next[1].due > end) break;
+      const [id, timer] = next; now = timer.due;
+      if (timer.repeat) timer.due += timer.repeat; else timers.delete(id);
+      timer.fn(); await Promise.resolve();
+    }
+    now = end; await Promise.resolve();
+  }
+  function element() {
+    const handlers = new Map();
+    const context = Object.fromEntries(["setTransform", "clearRect", "beginPath", "moveTo", "lineTo", "stroke", "fillText", "fillRect", "putImageData", "arc", "fill"].map(k => [k, () => {}]));
+    const e = { children: [], style: {}, value: "", textContent: "", width: 600, height: 180, clientWidth: 600, clientHeight: 180, paints: 0,
+      addEventListener: (kind, fn) => handlers.set(kind, fn), fire: kind => handlers.get(kind)?.({}),
+      append(...items) { this.children.push(...items); }, replaceChildren(...items) { this.children = items; },
+      getContext: () => context, reportValidity: () => true, focus() {},
+      get firstElementChild() { return this.children[0]; }
+    };
+    context.drawImage = () => e.paints++;
+    return e;
+  }
+  const html = await readFile(new URL("./trackball-diagnostics.html", import.meta.url), "utf8");
+  const elements = Object.fromEntries([...html.matchAll(/id="([^"]+)"/g)].map(m => [m[1], element()]));
+  for (const [id, value] of Object.entries({protocol:"slow", cpi:"1600", travel:"10", conditionName:"UI test", ball:"purple", position:"0"})) elements[id].value = value;
+  elements.conditions.elements = [elements.conditionName, elements.ball, elements.position, elements.cpi, elements.travel, elements.settingNote];
+  elements.captureBar.append(element());
+  const documentHandlers = new Map();
+  const document = { getElementById: id => { assert.ok(elements[id], id); return elements[id]; }, createElement: element, querySelectorAll: () => [], addEventListener:(kind,fn)=>documentHandlers.set(kind,fn) };
+  const source = await readFile(new URL("./trackball-diagnostics.mjs", import.meta.url), "utf8");
+  const usb = fakeUsb(); usb.hid.requestDevice = async () => [usb.device];
+  runInNewContext(source.replace(/^export /gm, ""), {
+    document, window: {devicePixelRatio:1, isSecureContext:true, addEventListener() {}}, performance:{now:()=>now},
+    navigator:{hid:usb.hid}, Uint8Array, DataView,
+    localStorage:{getItem:()=>null,setItem(){}}, crypto:{randomUUID:()=>"ui-test"}, ImageData:class {},
+    setTimeout:(fn,ms)=>schedule(fn,ms), clearTimeout:id=>timers.delete(id),
+    setInterval:(fn,ms)=>schedule(fn,ms,true), clearInterval:id=>timers.delete(id)
+  });
+  await elements.demoInput.fire("click"); await tick(650);
+  assert.ok(elements.sensorImage.paints >= 2, "live image updates without another click");
+  assert.match(elements.imageRate.textContent, /fps/);
+  assert.equal(elements.continuous.textContent, "ライブ停止");
+  assert.ok(Number(elements.liveRate.textContent) > 0 && Number(elements.liveRate.textContent) < 100, "motion history survives capture pauses");
+  documentHandlers.get("keydown")({code:"Escape",target:{tagName:"INPUT"}}); await tick(300);
+  assert.equal(elements.continuous.textContent, "ライブ開始");
+  const stoppedPaints = elements.sensorImage.paints; await tick(500);
+  assert.equal(elements.sensorImage.paints, stoppedPaints, "Escape stops further captures even while a field is focused");
+  await elements.continuous.fire("click"); await tick(50);
+  const preparation = elements.prepare.fire("click"); await tick(300); await preparation;
+  assert.equal(elements.continuous.textContent, "ライブ開始");
+  assert.equal(elements.continuous.disabled, true);
+  assert.equal(elements.trackingMode.textContent, "連続追跡");
+  const paints = elements.sensorImage.paints;
+  await elements.stroke.fire("click"); await tick(100); await elements.stroke.fire("click"); await tick(500);
+  assert.equal(elements.sensorImage.paints, paints, "movement measurement does not restart capture");
+  assert.equal(elements.directionResults.children[0].children[1].textContent, "1 / 3");
+  assert.equal(elements.exportRaw.disabled, false);
+  await elements.connectSensor.fire("click"); await new Promise(resolve => setImmediate(resolve)); await tick(300);
+  assert.equal(elements.continuous.textContent, "ライブ開始", "USB must not start camera capture automatically");
+  assert.equal(usb.writes.some(p => p[3] === 2), false, "navigation stays uninterrupted after USB connection");
+  assert.equal(elements.trackingMode.textContent, "連続追跡");
+  const closing = elements.connectSensor.fire("click"); await tick(10); await closing;
+});

@@ -314,8 +314,8 @@ function initialize() {
   const storageKey = "reel-trackball-lab-v1";
   let history = [], storageHealthy = true;
   const state = { source: null, live: [], previous: null, arrival: 0, lost: 0, invalid: 0, unadjusted: null,
-    hid: null, transport: null, lastInvalid: 0, demoTimer: null, session: null, capture: null, run: null };
-  const camera = { frame: null, reference: null, working: false, continuous: false, timeout: null, next: null, demo: null, started: 0, requestConditions: null };
+    hid: null, transport: null, lastInvalid: 0, demoTimer: null, session: null, capture: null, run: null, preparing: false, breakNext: true };
+  const camera = { frame: null, reference: null, working: false, continuous: false, timeout: null, next: null, demo: null, started: 0, requestConditions: null, waitingForSample: false, completedTimes: [] };
   const fmt = (value, suffix = "", digits = 1) => Number.isFinite(value) ? value.toFixed(digits) + suffix : "—";
   const sourceName = source => ({ sensor: "センサー直結", browser: "ブラウザ入力", demo: "デモ・合成データ" }[source] || "未接続");
   const notice = message => { $("notice").textContent = message; $("notice").hidden = !message; };
@@ -340,20 +340,22 @@ function initialize() {
   function sourceStatus(message, kind = "") {
     $("connectionStatus").textContent = message;
     $("statusDot").className = "dot " + kind;
-    $("prepare").disabled = !!state.session || camera.working || camera.continuous || !state.source || !fresh();
+    $("prepare").disabled = !!state.session || state.preparing || !state.source || (state.source === "sensor" ? !state.hid?.device?.opened : !fresh());
     $("coordinateLabel").textContent = state.source === "sensor" ? "補正前のセンサー counts" : state.source === "demo" ? "合成データ / counts" : state.source === "browser" ? "PC側の移動単位 u" : "入力待ち";
   }
   function resetInput(source) {
-    state.source = source; state.live = []; state.previous = null; state.arrival = 0; state.lost = 0; state.invalid = 0; state.lastInvalid = 0; state.unadjusted = null;
+    state.source = source; state.preparing = false; state.breakNext = true; state.live = []; state.previous = null; state.arrival = 0; state.lost = 0; state.invalid = 0; state.lastInvalid = 0; state.unadjusted = null;
     $("connectSensor").textContent = state.hid ? "USBを切断" : "USBで接続";
     $("sourceDetail").textContent = source === "sensor" ? "USB HIDで補正前のΔX/ΔY・SQUAL・露光と22×22の実画像を受信します。"
       : source === "browser" ? "PC側の出力を測ります。SQUAL・露光は取得できません。測定中は対象のトラックボールだけを動かしてください。"
       : source === "demo" ? "画面と測定手順を試すための合成データです。実機の評価には使えません。"
       : "USBでセンサーの生データ・実画像を受信できます。";
+    $("prompt").textContent = source ? "測定を準備してください。" : "USBで接続してください。";
     renderCamera();
     sourceStatus(source === "sensor" ? "接続済み · センサーデータ待ち" : sourceName(source), source === "demo" ? "demo" : "");
   }
   function ingest(sample) {
+    if (state.source === "demo" && camera.working) return;
     if (state.source === "sensor") {
       if (state.previous) {
         const advance = (sample.seq - state.previous.seq) >>> 0;
@@ -365,15 +367,20 @@ function initialize() {
       }
       state.previous = sample;
     }
+    sample.breakBefore = state.breakNext; state.breakNext = false;
     state.arrival = performance.now(); state.lost += sample.lost || 0;
     state.live.push(sample);
     if (state.live.length > 3000) state.live = state.live.slice(-2500);
     if (state.capture && sample.t >= state.capture.start) state.capture.samples.push({ ...sample, t: sample.t - state.capture.start });
+    if (camera.waitingForSample && camera.continuous && !camera.working && !state.session && !state.preparing) {
+      camera.waitingForSample = false;
+      camera.next = setTimeout(() => { if (camera.continuous) requestFrame(); }, 0);
+    }
   }
   async function disconnect() {
     stopSession("入力を切り替えたため中断しました。");
     clearInterval(state.demoTimer); state.demoTimer = null;
-    stopCamera(); camera.frame = null; camera.reference = null;
+    stopCamera(); camera.frame = null; camera.reference = null; camera.completedTimes = []; $("imageRate").textContent = "— fps";
     paintFrame("sensorImage", null); paintFrame("referenceImage", null); renderFrameMetrics();
     if (state.hid) { const hid = state.hid; state.hid = null; await hid.close(); }
     state.transport = null; resetInput(null);
@@ -395,9 +402,9 @@ function initialize() {
           if (state.live.at(-1)?.cpi && state.live.at(-1).cpi !== event.sample.cpi) stopSession("CPIが変わったため測定を中断しました。");
           ingest(event.sample);
         } else if (event.kind === "start") {
-          stopSession("撮影中は移動量を測定できません。"); camera.working = true;
-          $("cameraStatus").textContent = "センサー撮影中 · 追跡を一時停止";
-        } else if (event.kind === "progress") $("cameraStatus").textContent = '画像を受信中 · ' + event.count + ' / 484 px';
+          stopSession("撮影中は移動量を測定できません。"); camera.working = true; state.previous = null; state.breakNext = true;
+          $("cameraStatus").textContent = "撮影中";
+        } else if (event.kind === "progress") $("cameraStatus").textContent = '受信 ' + event.count + ' / 484 px';
         else if (event.kind === "frame") finishFrame(event.pixels,event.id);
         else if (event.kind === "error") { stopCamera(); notice(event.message); $("cameraStatus").textContent = "撮影失敗 · 再撮影してください"; }
       }, error => {
@@ -409,16 +416,16 @@ function initialize() {
       state.hid = hid; state.transport = "usb-hid"; resetInput("sensor");
       await hid.connect(navigator.hid);
       $("usbFirmwareNote").hidden = true;
-      notice("USB接続しました。読み取り品質と画像取得を同じ接続で利用できます。");
+      notice(""); setCameraLive(false);
     } catch (error) { await disconnect(); if (error.name !== "NotFoundError") notice("USB接続できませんでした: " + error.message); }
     finally { $("connectSensor").disabled = false; renderCamera(); }
   });
   $("browserInput").addEventListener("click", async () => {
     await disconnect(); resetInput("browser"); notice("");
-    $("prompt").textContent = "条件を記録して測定を準備してください。SQUAL・露光は取得できません。";
+    $("prompt").textContent = "測定を準備してください。";
   });
   $("demoInput").addEventListener("click", async () => {
-    await disconnect(); resetInput("demo"); notice("デモは合成データです。測定結果と履歴にもデモと表示します。");
+    await disconnect(); resetInput("demo"); notice("");
     let seq = 0; let t = 0;
     state.demoTimer = setInterval(() => {
       for (let i = 0; i < 4; i++) {
@@ -432,6 +439,7 @@ function initialize() {
         ingest({ seq, t, dx, dy, squal: Math.round(38 + 8 * Math.sin(seq / 35)), shutter: Math.round(120 + 40 * Math.sin(seq / 42)), motion: dx || dy ? 128 : 0 });
       }
     }, 16);
+    setCameraLive(true);
   });
 
 
@@ -449,26 +457,27 @@ function initialize() {
     context.drawImage(image, 0, 0, target.width, target.height);
   }
   function renderCamera() {
-    $("prepare").disabled = !!state.session || camera.working || camera.continuous || !state.source || !fresh();
+    $("prepare").disabled = !!state.session || state.preparing || !state.source || (state.source === "sensor" ? !state.hid?.device?.opened : !fresh());
     const ready = (state.transport === "usb-hid" && state.hid?.device?.opened) || state.source === "demo";
     $("snapshot").disabled = !ready || !!state.session || camera.working || camera.continuous;
     $("continuous").disabled = !ready || !!state.session || (camera.working && !camera.continuous);
-    $("continuous").textContent = camera.continuous ? "連続撮影を停止" : "連続撮影";
-    $("referenceFrame").disabled = !camera.frame || camera.working;
+    $("continuous").textContent = camera.continuous ? "ライブ停止" : "ライブ開始";
+    $("referenceFrame").disabled = !camera.frame;
     $("exportFrame").disabled = !camera.frame; $("exportPng").disabled = !camera.frame;
-    $("imageKind").textContent = state.source === "demo" ? "DEMO · 合成画像 / 22×22" : "実画像 · 22×22 / 7 bit";
-    if (!camera.frame && !camera.working) $("cameraStatus").textContent = state.source === "demo" ? "合成画像の表示を試せます" : "USB接続後に撮影できます";
+    $("imageKind").textContent = state.source === "demo" ? "DEMO / 22×22" : "22×22 / 7 bit";
+    $("trackingMode").textContent = camera.continuous || camera.working ? "撮影中 · Escで停止" : "連続追跡";
+    if (!camera.frame && !camera.working) $("cameraStatus").textContent = "画像待ち";
   }
   function stopCamera() {
     clearTimeout(camera.timeout); clearTimeout(camera.next); clearTimeout(camera.demo);
-    camera.timeout = camera.next = null; camera.working = false; camera.continuous = false;
+    camera.timeout = camera.next = null; camera.working = false; camera.continuous = false; camera.waitingForSample = false;
     renderCamera();
   }
   async function requestFrame() {
-    if (camera.working || state.session || !(state.hid?.device?.opened || state.source === "demo")) return;
+    if (camera.working || state.session || state.preparing || !(state.hid?.device?.opened || state.source === "demo")) return;
     camera.working = true; camera.started = performance.now(); camera.requestConditions = cameraConditions();
-    state.live = []; state.previous = null; state.arrival = 0;
-    $("cameraStatus").textContent = "撮影要求中 · 追跡を一時停止"; renderCamera();
+    state.previous = null; state.breakNext = true;
+    $("cameraStatus").textContent = "撮影中"; renderCamera();
     camera.timeout = setTimeout(() => {
       stopCamera(); $("cameraStatus").textContent = "撮影タイムアウト · 最後の画像を保持";
       notice("画像が届きませんでした。診断ファームとUSB接続を確認してください。");
@@ -483,13 +492,18 @@ function initialize() {
   }
   function finishFrame(pixels, id) {
     clearTimeout(camera.timeout); camera.timeout = null; camera.demo = null;
-    camera.working = false; state.live = []; state.previous = null; state.arrival = 0;
+    camera.working = false; state.previous = null; state.breakNext = true;
+    const completed = performance.now();
+    camera.completedTimes.push(completed); camera.completedTimes = camera.completedTimes.filter(t => t >= completed - 3000);
     camera.frame = { id, date: new Date().toISOString(), source: state.source === "demo" ? "demo" : "sensor-usb",
       captureMs: performance.now() - camera.started, conditions: camera.requestConditions || cameraConditions(),
       pixels: Array.from(pixels), metrics: frameMetrics(pixels) };
-    $("cameraStatus").textContent = (camera.frame.source === "demo" ? "合成画像" : "受信完了 · 追跡復帰") + ' · ' + fmt(camera.frame.captureMs, ' ms', 0) + ' / 撮影・転送';
+    const times = camera.completedTimes;
+    const fps = times.length > 1 ? (times.length - 1) * 1000 / (times.at(-1) - times[0]) : null;
+    $("imageRate").textContent = fmt(fps, " fps", 1) + " / " + fmt(camera.frame.captureMs, " ms", 0);
+    $("cameraStatus").textContent = "追跡復帰";
     paintFrame("sensorImage", camera.frame); renderFrameMetrics(); renderCamera();
-    if (camera.continuous) camera.next = setTimeout(requestFrame, 500);
+    camera.waitingForSample = camera.continuous;
   }
   function renderFrameMetrics() {
     const b = camera.frame, a = camera.reference;
@@ -497,7 +511,7 @@ function initialize() {
     const labels = [["明るさ 平均", "mean", ""], ["コントラスト σ", "sd", ""], ["隣接画素差 RMS", "gradient", ""], ["暗い画素 ≤2", "dark", "%"], ["明るい画素 ≥125", "bright", "%"]];
     $("imageMetrics").replaceChildren(...labels.map(([label, key, suffix]) => row([label, a ? fmt(a.metrics[key], suffix, 2) : "—", b ? fmt(b.metrics[key], suffix, 2) : "—", comparable ? fmt(b.metrics[key] - a.metrics[key], suffix, 2) : "—"])));
     $("frameLabel").textContent = b ? b.conditions.name + ' · ' + b.conditions.ball + ' · ' + b.conditions.position : "撮影待ち";
-    $("referenceLabel").textContent = a ? a.conditions.name + ' · ' + a.conditions.ball + ' · ' + a.conditions.position : "現在の画像を基準Aに保存すると並べて比較できます";
+    $("referenceLabel").textContent = a ? a.conditions.name + ' · ' + a.conditions.ball + ' · ' + a.conditions.position : "—";
     const context = $("imageHistogram").getContext("2d"); context.clearRect(0, 0, 512, 100);
     if (b) {
       const bins = new Array(128).fill(0); for (const pixel of b.pixels) bins[pixel]++;
@@ -506,10 +520,12 @@ function initialize() {
     }
   }
   $("snapshot").addEventListener("click", requestFrame);
-  $("continuous").addEventListener("click", () => {
-    camera.continuous = !camera.continuous; clearTimeout(camera.next); renderCamera();
-    if (camera.continuous) requestFrame();
-  });
+  function setCameraLive(enabled) {
+    camera.continuous = enabled; camera.waitingForSample = enabled; clearTimeout(camera.next);
+    if (enabled && !camera.working && fresh() && state.live.length) requestFrame();
+    renderCamera();
+  }
+  $("continuous").addEventListener("click", () => setCameraLive(!camera.continuous));
   $("referenceFrame").addEventListener("click", () => { camera.reference = camera.frame; paintFrame("referenceImage", camera.reference); renderFrameMetrics(); });
   $("stretchImage").addEventListener("change", () => { paintFrame("sensorImage", camera.frame); paintFrame("referenceImage", camera.reference); });
   $("exportFrame").addEventListener("click", () => {
@@ -522,13 +538,13 @@ function initialize() {
     const filename = camera.frame.source === "demo" ? "reel-sensor-demo.png" : "reel-sensor-22x22.png";
     image.toBlob(blob => { if (blob) download(blob, filename, "image/png"); else notice("PNGを生成できませんでした。"); }, "image/png");
   });
-  document.addEventListener("visibilitychange", () => { if (document.hidden) { camera.continuous = false; clearTimeout(camera.next); renderCamera(); } });
+  document.addEventListener("visibilitychange", () => { if (document.hidden) setCameraLive(false); });
   paintFrame("sensorImage", null); paintFrame("referenceImage", null);
 
   function lockControls(locked) {
     for (const field of $("conditions").elements) field.disabled = locked;
     renderCamera();
-    $("protocol").disabled = locked; $("prepare").disabled = locked; $("cancel").disabled = !locked;
+    $("protocol").disabled = locked; $("prepare").disabled = locked; $("cancel").disabled = !locked; $("stroke").disabled = !locked;
   }
   function promptStep() {
     if (!state.session) return;
@@ -538,10 +554,22 @@ function initialize() {
     $("directionSymbol").textContent = directional ? directions[Math.floor(step / 3)].symbol : state.session.protocol === "rest" ? "○" : "↔";
     $("prompt").textContent = directional ? `${directions[Math.floor(step / 3)].label}へ ${(step % 3) + 1} / 3回目 · Spaceを押したまま1回回し、離してから指を戻す`
       : state.session.protocol === "rest" ? "Spaceで開始。その後は手を離して5秒間静止してください。" : "Spaceで開始。5秒間、自由に動かしてください。";
+    $("stroke").disabled = false; $("stroke").textContent = directional ? "1回測る" : "5秒測る";
     $("captureBar").firstElementChild.style.width = "0%";
   }
   $("prepare").addEventListener("click", async () => {
-    if (state.session || camera.working || camera.continuous || !state.source || !fresh() || !$("conditions").reportValidity()) return;
+    if (state.session || state.preparing || !state.source || !$("conditions").reportValidity()) return;
+    const input = state.source, hid = state.hid;
+    state.preparing = true; setCameraLive(false);
+    const deadline = performance.now() + 2500;
+    while (camera.working && performance.now() < deadline && state.preparing) await new Promise(resolve => setTimeout(resolve, 10));
+    if (input === "sensor") {
+      state.arrival = 0;
+      while (!fresh() && performance.now() < deadline && state.preparing) await new Promise(resolve => setTimeout(resolve, 10));
+    }
+    if (!state.preparing || state.source !== input || state.hid !== hid) return;
+    state.preparing = false;
+    if (camera.working || !fresh()) { notice("追跡データが復帰していません。USBを接続し直してください。"); renderCamera(); return; }
     const previousRun = state.run;
     state.run = {
       id: crypto.randomUUID(), date: new Date().toISOString(), source: state.source, transport: state.transport, protocol: $("protocol").value,
@@ -575,7 +603,8 @@ function initialize() {
     const fixed = !["slow", "fast"].includes(state.session.protocol);
     state.capture = { start: state.source === "browser" ? performance.now() : first?.t || 0, wallStart: performance.now(), samples: [], invalidAtStart: state.invalid };
     state.capture.timer = setTimeout(finishCapture, fixed ? 5000 : 15000);
-    $("prompt").textContent = fixed ? (state.session.protocol === "rest" ? "手を離して静止 · 5秒で自動終了" : "自由に操作 · 5秒で自動終了") : "計測中 · 同じ量だけ回し、動かし終えたらSpaceを離す";
+    $("stroke").disabled = fixed; $("stroke").textContent = fixed ? "計測中…" : "この1回を終了";
+    $("prompt").textContent = fixed ? (state.session.protocol === "rest" ? "手を離して静止 · 5秒で自動終了" : "自由に操作 · 5秒で自動終了") : "同じ量を回す → 終了ボタン / Spaceを離す";
   }
   function finishCapture() {
     if (!state.capture || !state.session) return;
@@ -598,9 +627,9 @@ function initialize() {
     } else promptStep();
   }
   function finishSession() {
-    state.session = null; state.capture = null; lockControls(false);
+    state.session = null; state.capture = null; lockControls(false); $("stroke").textContent = "1回測る";
     $("progress").textContent = state.run.complete ? "測定完了" : "未完了・比較対象外";
-    $("prompt").textContent = state.run.complete ? "測定完了。球・ケース位置をひとつ変えて比較できます。" : state.run.reason;
+    $("prompt").textContent = state.run.complete ? "測定完了" : state.run.reason;
     if (document.pointerLockElement === $("captureArea")) document.exitPointerLock();
     sourceStatus(sourceName(state.source), state.source === "demo" ? "demo" : ""); renderResults();
   }
@@ -614,8 +643,10 @@ function initialize() {
     }
     state.run.complete = false; state.run.reason = reason; finishSession(); notice(reason);
   }
+  $("stroke").addEventListener("click", () => state.capture ? finishCapture() : beginCapture());
   $("cancel").addEventListener("click", () => stopSession("測定を中断しました。途中のデータはCSV・JSONで保存できます。"));
   document.addEventListener("keydown", event => {
+    if (event.code === "Escape" && !state.session) { setCameraLive(false); return; }
     if (!state.session || /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName)) return;
     if (event.code === "Space") { event.preventDefault(); if (!event.repeat) beginCapture(); }
     if (event.code === "Escape") stopSession("Escで測定を終了しました。未完了の結果は比較に使いません。");
@@ -648,13 +679,14 @@ function initialize() {
   function renderResults() {
     const run = state.run; if (!run) return;
     const summary = summarizeRun(run); const unit = run.source === "browser" ? " u" : " counts";
-    $("resultStatus").textContent = `${sourceName(run.source)} · ${protocols[run.protocol]} · 有効 ${summary.validCount}回`;
+    $("resultStatus").textContent = `${sourceName(run.source)} · ${protocols[run.protocol]} · ${summary.validCount}回`;
+    $("resultUnit").textContent = unit.trim();
     const cards = run.protocol === "rest" ? [[fmt(summary.rms, unit), "静止偏位 RMS"], [fmt(summary.net, unit), "静止中の正味移動"], [fmt(summary.squalP10, "", 0), "SQUAL P10"], [fmt(summary.shutterMedian, "", 0), "露光 中央値"]]
       : [[fmt(summary.balance, "%"), "4方向の最小 / 最大"], [fmt(summary.crossRms, unit), "横ぶれ RMS 中央値"], [fmt(summary.reversePercent, "%"), "逆走率 中央値"], [fmt(summary.squalP10, "", 0), "SQUAL P10"]];
     $("resultCards").replaceChildren(...cards.map(([value, label]) => { const div = document.createElement("div"); div.className = "summary"; const strong = document.createElement("strong"); strong.textContent = value; const span = document.createElement("span"); span.textContent = label; div.append(strong, span); return div; }));
-    $("directionResults").replaceChildren(...summary.groups.map(g => row([g.label, g.count + " / 3", fmt(g.net, unit), fmt(g.cv, "%"), fmt(g.crossRms, unit), fmt(g.reversePercent, "%"), fmt(g.gapMs, " ms", 0), fmt(g.squalP10, "", 0)])));
-    if (["rest", "free"].includes(run.protocol)) $("directionResults").replaceChildren(row([protocols[run.protocol], summary.validCount + " / 1", fmt(summary.net, unit), "—", fmt(summary.crossRms, unit), fmt(summary.reversePercent, "%"), fmt(summary.gapMs, " ms", 0), fmt(summary.squalP10, "", 0)]));
-    $("resultExplanation").textContent = run.reason || (summary.lost ? "通信欠落のある測定は比較対象外です。USB接続を確認して再計測してください。" : "4方向の値は同じ回転量で比較してください。ゼロ出力は手の停止でも発生します。横ぶれ・逆走はセンサー軸ではなく、各ストロークの主進行方向を基準に算出します。");
+    $("directionResults").replaceChildren(...summary.groups.map(g => row([g.label, g.count + " / 3", fmt(g.net), fmt(g.cv), fmt(g.crossRms), fmt(g.reversePercent), fmt(g.gapMs, "", 0), fmt(g.squalP10, "", 0)])));
+    if (["rest", "free"].includes(run.protocol)) $("directionResults").replaceChildren(row([protocols[run.protocol], summary.validCount + " / 1", fmt(summary.net), "—", fmt(summary.crossRms), fmt(summary.reversePercent), fmt(summary.gapMs, "", 0), fmt(summary.squalP10, "", 0)]));
+    $("resultExplanation").textContent = run.reason || (summary.lost ? "通信欠落のある測定は比較対象外です。USB接続を確認して再計測してください。" : "");
     $("exportRaw").disabled = !run.strokes.length; $("exportJson").disabled = !run.strokes.length;
   }
   $("exportRaw").addEventListener("click", () => download(rawCsv(state.run), "reel-trackball-raw.csv", "text/csv;charset=utf-8"));
@@ -680,16 +712,18 @@ function initialize() {
     renderComparison();
   }
   function renderComparison() {
+    $("comparisonNote").textContent = "";
     const a = history.find(run => run.id === $("compareA").value), b = history.find(run => run.id === $("compareB").value);
-    if (!a || !b || a.id === b.id) { $("comparisonResults").replaceChildren(row(["比較には異なる2件の測定が必要です。", "—", "—", "—"])); return; }
+    if (!a || !b || a.id === b.id) { $("comparisonResults").replaceChildren(row(["測定2件を選択", "—", "—", "—"])); return; }
     const issues = comparisonIssues(a, b);
-    if (issues.length) { $("comparisonNote").textContent = "比較を停止: " + issues.join(" / "); $("comparisonResults").replaceChildren(row(["条件をそろえて再計測してください。", "—", "—", "—"])); return; }
+    if (issues.length) { $("comparisonNote").textContent = "比較を停止: " + issues.join(" / "); $("comparisonResults").replaceChildren(row(["条件不一致", "—", "—", "—"])); return; }
     const sa = summarizeRun(a), sb = summarizeRun(b); const unit = a.source === "browser" ? " u" : " counts";
+    $("comparisonUnit").textContent = unit.trim();
     const pairs = [["SQUAL P10", sa.squalP10, sb.squalP10, ""], ["露光 中央値", sa.shutterMedian, sb.shutterMedian, ""], ["横ぶれ RMS", sa.crossRms, sb.crossRms, unit], ["逆走率", sa.reversePercent, sb.reversePercent, "%"], ["最大無入力", sa.gapMs, sb.gapMs, " ms"]];
     if (["rest", "free"].includes(a.protocol)) pairs.unshift(["正味移動", sa.net, sb.net, unit], ["偏位 RMS", sa.rms, sb.rms, unit]);
-    else pairs.unshift(...directions.map((d, i) => [d.label + " 移動量", sa.groups[i].net, sb.groups[i].net, unit]), ["4方向の最小 / 最大", sa.balance, sb.balance, "%"]);
-    $("comparisonResults").replaceChildren(...pairs.map(([label, va, vb, suffix]) => row([label, fmt(va, suffix), fmt(vb, suffix), Number.isFinite(va) && va > 0 && Number.isFinite(vb) ? fmt(vb / va, "×", 3) : "—"])));
-    $("comparisonNote").textContent = a.protocol !== b.protocol ? "速度の異なる測定です。同じ球・位置・回転量なら、方向ごとの高速/低速の出力量を比較できます。比は取りこぼし率を直接表すものではありません。" : "同じCPI・移動量の目安・入力元で比較しています。球、位置、補正メモも確認してください。全項目をひとつの合格点には換算しません。";
+    else pairs.unshift(...directions.map((d, i) => [d.label + " 移動量", sa.groups[i].net, sb.groups[i].net, unit]), ["方向比", sa.balance, sb.balance, "%"]);
+    $("comparisonResults").replaceChildren(...pairs.map(([label, va, vb, suffix]) => row([label, fmt(va, suffix === unit ? "" : suffix), fmt(vb, suffix === unit ? "" : suffix), Number.isFinite(va) && va > 0 && Number.isFinite(vb) ? fmt(vb / va, "×", 3) : "—"])));
+    $("comparisonNote").textContent = a.protocol !== b.protocol ? "低速 / 高速の比較" : "";
   }
   $("compareA").addEventListener("change", renderComparison); $("compareB").addEventListener("change", renderComparison);
 
@@ -708,6 +742,7 @@ function initialize() {
     for (const sample of samples) {
       const xx = x(sample), yy = y(sample);
       if (!Number.isFinite(xx) || !Number.isFinite(yy) || sample.lost) { started = false; continue; }
+      if (sample.breakBefore) started = false;
       if (started) context.lineTo(xx, yy); else context.moveTo(xx, yy);
       started = true;
     }
@@ -727,7 +762,7 @@ function initialize() {
     $("liveLost").textContent = state.source === "sensor" ? `${state.lost} / 不正 ${state.invalid}` : "—";
     if (state.source === "sensor") {
       const recentProblem = live.some(s => s.lost) || (state.lastInvalid > 0 && performance.now() - state.lastInvalid < 4000);
-      sourceStatus(camera.working ? "センサー撮影中 · 追跡を一時停止" : alive ? recentProblem ? "USB受信中 · 直近4秒に通信欠落" : "USB HID · センサー受信中" : state.hid ? "USBデータ待ち" : "USB切断", alive ? recentProblem ? "error" : "live" : "error");
+      sourceStatus(camera.working ? "USB HID · 撮影中" : alive ? recentProblem ? "USB受信中 · 直近4秒に通信欠落" : "USB HID · 受信中" : state.hid ? "USBデータ待ち" : "USB切断", camera.working ? "live" : alive ? recentProblem ? "error" : "live" : "error");
       if (!alive && state.session && !camera.working) stopSession("センサーデータが途切れました。未完了の結果は比較に使いません。");
     }
     renderCamera();
@@ -738,7 +773,7 @@ function initialize() {
     const trajectory = canvas("trajectory");
     if (!live.length) { trajectory.c.fillText("INPUT WAITING", 20, 25); }
     else {
-      let x = 0, y = 0; const positions = live.map(s => { x += s.dx; y += s.dy; return { x, y, lost: s.lost }; });
+      let x = 0, y = 0; const positions = live.map(s => { x += s.dx; y += s.dy; return { x, y, lost: s.lost, breakBefore: s.breakBefore }; });
       const xs = positions.map(p => p.x), ys = positions.map(p => p.y);
       const minX = Math.min(0, ...xs), maxX = Math.max(0, ...xs), minY = Math.min(0, ...ys), maxY = Math.max(0, ...ys);
       const factor = Math.min((trajectory.width - 70) / Math.max(20, maxX - minX), (trajectory.height - 60) / Math.max(20, maxY - minY));
@@ -765,7 +800,7 @@ function initialize() {
       for (const sample of live) {
         const index = Math.min(199, Math.max(0, Math.floor((sample.t - start) / 20)));
         bins[index].value += Math.hypot(sample.dx, sample.dy) * 50;
-        if (sample.lost) { const first = previous ? Math.max(0, Math.floor((previous.t - start) / 20)) : index; for (let i = first; i <= index; i++) bins[i].lost = true; }
+        if (sample.lost || sample.breakBefore) { const first = previous ? Math.max(0, Math.floor((previous.t - start) / 20)) : index; for (let i = first; i <= index; i++) bins[i].lost = true; }
         previous = sample;
       }
       const max = Math.max(1, ...bins.map(b => b.value));
@@ -773,5 +808,9 @@ function initialize() {
       speed.c.fillText(fmt(max, state.source === "browser" ? " u/s" : " counts/s", 0), 15, 15);
     }
   }
+  $("openGuide").addEventListener("click", () => $("guideDialog").showModal());
+  $("openHistory").addEventListener("click", () => $("historyDialog").showModal());
+  document.querySelectorAll("[data-close]").forEach(button => button.addEventListener("click", () => button.closest("dialog").close()));
+  $("notice").addEventListener("click", () => notice(""));
   renderHistory(); renderLive(); setInterval(renderLive, 100);
 }

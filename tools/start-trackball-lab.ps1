@@ -4,7 +4,7 @@ $labUrl = 'http://127.0.0.1:4321/trackball-diagnostics.html'
 function Test-TrackballLab {
     try {
         $page = Invoke-WebRequest -Uri $labUrl -UseBasicParsing -TimeoutSec 2
-        return $page.StatusCode -eq 200 -and $page.Content.Contains('id="connectBle"') -and $page.Content.Contains('id="sensorImage"')
+        return $page.StatusCode -eq 200 -and $page.Content.Contains('id="connectSensor"') -and $page.Content.Contains('id="sensorImage"')
     } catch {
         return $false
     }

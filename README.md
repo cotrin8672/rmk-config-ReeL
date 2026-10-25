@@ -73,8 +73,14 @@ corrections.
 The page offers live raw displacement, SQUAL and shutter plots; hands-off rest
 measurement; three strokes in each of four directions at slow or fast speeds;
 condition histories and A/B comparisons; raw CSV/result JSON exports; and a
-22x22 sensor-image viewer with single/continuous capture, reference image A,
+22x22 sensor-image viewer with automatic live capture, reference image A,
 raw brightness/contrast/neighbor-difference statistics, PNG and image JSON.
+Live image capture must be explicitly started: PMW3610 cannot track motion
+while capturing/resetting, so continuous capture makes normal cursor use
+unreliable. Stop live capture to restore uninterrupted navigation.
+The desktop console keeps images, all three plots, measurements and comparison
+on one viewport (verified at 1280x720 and 1265x712); narrow screens stack panels.
+Verification steps and history open in dialogs.
 Record the ball, case position, CPI and a repeatable surface travel. Input CPI
 and travel are notes; USB telemetry reads back actual CPI and records it for tests. Browser pointer
 input and explicitly labeled synthetic demo data are available as separate
@@ -120,8 +126,14 @@ Capture pauses navigation and always resets/reconfigures PMW3610 afterward,
 restoring CPI and smart mode. The page requires every valid chunk and a
 restoration marker before accepting the image. Pixel order follows PixArt
 Figure 17: top right, down each column, then left. Display contrast stretch
-does not change PNG/raw statistics. Camera and movement tests are mutually
-exclusive. Hardware pins, split roles, keyboard Bluetooth and calibration
+does not change PNG/raw statistics. USB connection starts in navigation mode, without capturing images.
+Selecting **ライブ開始** requests the next frame after receiving a real
+navigation sample; the graphs retain
+history and break their lines across intentional capture pauses. Displayed
+image FPS measures completed captures, including transfer and recovery.
+Selecting **測定を準備** stops live capture and waits for navigation to resume
+before recording. Camera and movement tests are mutually exclusive.
+Hardware pins, split roles, keyboard Bluetooth and calibration
 flash formats are unchanged. Normal builds retain interrupt-driven polling.
 
 Metrics have deliberately limited interpretations:
@@ -155,7 +167,7 @@ Research informing this implementation:
 | [WebHID](https://developer.chrome.com/docs/capabilities/hid) | Use the same OS HID access method as the calibration console, with a sensor-only USB collection. |
 | RMK USB logger source | Replace the 1 KiB debug-log ring with batched binary HID requests for sensor measurements. |
 
-Run the browser math/parser checks with `node --test tools/test-trackball-diagnostics.mjs`.
+Run the browser math/parser and live-capture regression checks with `node --test tools/test-trackball-diagnostics.mjs`.
 CI also runs the pinned RMK USB queue/protocol tests with `node tools/test-usb-diagnostic-protocol.mjs`, tests the sensor burst decoder and builds both normal and diagnostic UF2s.
 
 ### Calibration console
