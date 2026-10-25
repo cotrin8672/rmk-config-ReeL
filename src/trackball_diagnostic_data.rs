@@ -57,7 +57,7 @@ mod tests {
     }
 }
 
-/// Twenty-byte notifications fit the minimum BLE ATT MTU without fragmentation.
+/// Three complete twenty-byte sensor records fit one USB HID reply.
 pub fn motion_packet(sample: &SensorSample, seq: u32, micros: u32, cpi: u16) -> [u8; 20] {
     let mut packet = [0u8; 20];
     packet[..2].copy_from_slice(b"T\x01");
@@ -89,7 +89,7 @@ pub fn frame_packet(id: u16, offset: usize, pixels: &[u8; 484]) -> Option<[u8; 2
 mod packet_tests {
     use super::*;
     #[test]
-    fn preserves_signed_motion_and_all_484_pixels_in_ble_packets() {
+    fn preserves_signed_motion_and_all_484_pixels_in_usb_packets() {
         let sample = decode_burst(&[128, 255, 0, 248, 42, 0x12, 0x34]).unwrap();
         assert_eq!(
             motion_packet(&sample, 7, 4000, 1600),

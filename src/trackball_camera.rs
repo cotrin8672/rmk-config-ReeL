@@ -1,12 +1,11 @@
-//! The pointing task owns capture and reset; BLE never touches the SPI bus.
+//! The pointing task owns capture and reset; USB never touches the SPI bus.
 use crate::trackball_diagnostic_data::frame_packet;
 use core::sync::atomic::{AtomicU16, Ordering};
-use embassy_time::{Duration, with_timeout};
 use embedded_hal::digital::{InputPin, OutputPin};
 use embedded_hal_async::{digital::Wait, spi::SpiBus};
-use rmk::ble::diagnostics;
 use rmk::input_device::pmw3610::Pmw3610;
 use rmk::input_device::pointing::{MotionData, PointingDriver, PointingDriverError};
+use rmk::usb::diagnostics;
 
 static CPI: AtomicU16 = AtomicU16::new(1600);
 pub fn active_cpi() -> u16 {
@@ -29,13 +28,7 @@ impl<S: SpiBus, C: OutputPin, M: InputPin + Wait> CameraSensor<S, C, M> {
 }
 
 async fn send(packet: [u8; 20]) -> bool {
-    diagnostics::mode() != 0
-        && with_timeout(
-            Duration::from_millis(250),
-            diagnostics::PACKETS.send(packet),
-        )
-        .await
-        .is_ok()
+    diagnostics::send(packet).await
 }
 fn status(id: u16, phase: u8) -> [u8; 20] {
     let mut packet = [0u8; 20];

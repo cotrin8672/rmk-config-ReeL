@@ -7,11 +7,10 @@ license = "MIT OR Apache-2.0"
 [features]
 default = ["firmware-defmt"]
 firmware-defmt = ["rmk/defmt"]
-trackball-diagnostics = ["rmk/usb_log", "rmk/ble_diagnostics", "dep:log"]
+trackball-diagnostics = ["rmk/usb_diagnostics"]
 
 [dependencies]
-log = { version = "0.4", optional = true }
-rmk = { git = "https://github.com/cotrin8672/rmk.git", rev = "35226532644cc3335946056ae9fba4213c59572a", default-features = false, features = [
+rmk = { git = "https://github.com/cotrin8672/rmk.git", rev = "cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24", default-features = false, features = [
     "storage", "vial", "vial_lock", "watchdog",
     "nrf52840_ble",
     "split",
@@ -19,7 +18,7 @@ rmk = { git = "https://github.com/cotrin8672/rmk.git", rev = "35226532644cc33359
     "adafruit_bl",
     "display",
 ] }
-rmk-types = { git = "https://github.com/cotrin8672/rmk.git", rev = "35226532644cc3335946056ae9fba4213c59572a" }
+rmk-types = { git = "https://github.com/cotrin8672/rmk.git", rev = "cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24" }
 nrf-sdc = { git = "https://github.com/alexmoon/nrf-sdc", rev = "abe49d22ebfc85fae134eb082fbfddf752016a55", features = [
     "defmt",
     "peripheral",

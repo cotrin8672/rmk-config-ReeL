@@ -4,3 +4,5 @@
 /*.uf2
 /tmp/
 *.log
+
+/tools/firmware/

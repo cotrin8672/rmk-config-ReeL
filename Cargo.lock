@@ -872,18 +872,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "embassy-usb-logger"
-version = "0.6.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d67df3b052328a06f8d1d9bb0cb8a013aff9740e43eaa03cc2015e8ccc48d8e5"
-dependencies = [
- "embassy-futures",
- "embassy-sync",
- "embassy-usb",
- "log",
-]
-
-[[package]]
 name = "embassy-usb-synopsys-otg"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1890,7 +1878,6 @@ dependencies = [
  "embedded-hal-async",
  "embedded-storage-async",
  "json",
- "log",
  "nrf-mpsl",
  "nrf-sdc",
  "panic-probe",
@@ -1933,7 +1920,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 [[package]]
 name = "rmk"
 version = "0.8.2"
-source = "git+https://github.com/cotrin8672/rmk.git?rev=35226532644cc3335946056ae9fba4213c59572a#35226532644cc3335946056ae9fba4213c59572a"
+source = "git+https://github.com/cotrin8672/rmk.git?rev=cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24#cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24"
 dependencies = [
  "bt-hci",
  "byteorder",
@@ -1947,7 +1934,6 @@ dependencies = [
  "embassy-sync",
  "embassy-time",
  "embassy-usb",
- "embassy-usb-logger",
  "embedded-graphics",
  "embedded-hal 1.0.0",
  "embedded-hal-async",
@@ -1956,7 +1942,6 @@ dependencies = [
  "embedded-storage-async",
  "futures",
  "heapless 0.9.3",
- "log",
  "paste",
  "postcard",
  "rmk-macro",
@@ -1971,7 +1956,7 @@ dependencies = [
 [[package]]
 name = "rmk-config"
 version = "0.6.1"
-source = "git+https://github.com/cotrin8672/rmk.git?rev=35226532644cc3335946056ae9fba4213c59572a#35226532644cc3335946056ae9fba4213c59572a"
+source = "git+https://github.com/cotrin8672/rmk.git?rev=cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24#cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24"
 dependencies = [
  "config",
  "once_cell",
@@ -1986,7 +1971,7 @@ dependencies = [
 [[package]]
 name = "rmk-macro"
 version = "0.7.1"
-source = "git+https://github.com/cotrin8672/rmk.git?rev=35226532644cc3335946056ae9fba4213c59572a#35226532644cc3335946056ae9fba4213c59572a"
+source = "git+https://github.com/cotrin8672/rmk.git?rev=cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24#cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24"
 dependencies = [
  "cargo_toml",
  "darling 0.23.0",
@@ -2001,7 +1986,7 @@ dependencies = [
 [[package]]
 name = "rmk-types"
 version = "0.2.2"
-source = "git+https://github.com/cotrin8672/rmk.git?rev=35226532644cc3335946056ae9fba4213c59572a#35226532644cc3335946056ae9fba4213c59572a"
+source = "git+https://github.com/cotrin8672/rmk.git?rev=cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24#cc4a7c9a5f95fe8fcb1466c4febf98bf0e272d24"
 dependencies = [
  "bitfield-struct",
  "defmt 1.1.1",
@@ -2496,7 +2481,6 @@ dependencies = [
  "embedded-io 0.7.1",
  "futures",
  "heapless 0.9.3",
- "log",
  "p256",
  "rand",
  "rand_chacha",

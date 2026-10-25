@@ -116,7 +116,7 @@ impl<S: PointingDriver> TransformingPointingDevice<S> {
         }
 
         #[cfg(feature = "trackball-diagnostics")]
-        if rmk::ble::diagnostics::mode() == 2 {
+        if rmk::usb::diagnostics::mode() == 2 {
             self.accumulated_x = 0;
             self.accumulated_y = 0;
             self.pending_report_x = 0;

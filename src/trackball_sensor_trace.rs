@@ -32,26 +32,15 @@ impl<S: SpiBus> SpiBus for SensorTrace<S> {
         self.spi.read(words).await?;
         if burst {
             if let Some(sample) = decode_burst(words) {
-                if rmk::ble::diagnostics::mode() == 1 {
+                if rmk::usb::diagnostics::mode() == 1 {
                     let packet = crate::trackball_diagnostic_data::motion_packet(
                         &sample,
                         self.sequence,
                         embassy_time::Instant::now().as_micros() as u32,
                         crate::trackball_camera::active_cpi(),
                     );
-                    let _ = rmk::ble::diagnostics::PACKETS.try_send(packet);
+                    let _ = rmk::usb::diagnostics::try_send(packet);
                 }
-                // Failed reads and transport overflow leave sequence gaps; never wait for the host.
-                log::info!(
-                    "RTB1,{},{},{},{},{},{},{}",
-                    self.sequence,
-                    embassy_time::Instant::now().as_micros(),
-                    sample.dx,
-                    sample.dy,
-                    sample.squal,
-                    sample.shutter,
-                    sample.motion,
-                );
             }
         }
         Ok(())

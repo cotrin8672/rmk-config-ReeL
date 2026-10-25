@@ -151,9 +151,6 @@ export function rawCsv(run) {
 }
 
 
-export const bleService = "ef558a00-6fa0-4c67-aa6e-06b1cdf63192";
-const bleCommand = "ef558a01-6fa0-4c67-aa6e-06b1cdf63192";
-const bleData = "ef558a02-6fa0-4c67-aa6e-06b1cdf63192";
 
 export function frameMetrics(pixels) {
   if (pixels.length !== 484 || Array.from(pixels).some(p => !Number.isInteger(p) || p < 0 || p > 127)) throw new Error("Invalid 22x22 frame");
@@ -229,33 +226,83 @@ export class SensorPackets {
   }
 }
 
-export class BleSensorConnection {
-  constructor(onPacket, onDisconnect) { this.onPacket = onPacket; this.onDisconnect = onDisconnect; }
-  async connect(bluetooth) {
-    this.device = await bluetooth.requestDevice({ filters: [{ namePrefix: "ReeL" }], optionalServices: [bleService] });
-    this.disconnected = () => { this.command = null; this.onDisconnect(); };
-    this.device.addEventListener("gattserverdisconnected", this.disconnected);
+export function decodeUsbReport(value, tag) {
+  const bytes = value instanceof DataView ? new Uint8Array(value.buffer, value.byteOffset, value.byteLength) : value;
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 64 || bytes[0] !== 0xd2 || bytes[1] !== tag
+      || (bytes[2] & 0x7f) !== 3 || bytes[3] > 3) throw new Error("USB診断応答が不正です");
+  if (bytes.slice(4 + bytes[3] * 20).some(b => b !== 0)) throw new Error("USB診断応答の長さが不正です");
+  return { overflow: !!(bytes[2] & 128), packets: Array.from({ length: bytes[3] }, (_, i) => bytes.slice(4 + i * 20, 24 + i * 20)) };
+}
+
+export class UsbSensorConnection {
+  constructor(onPacket, onDisconnect, onOverflow = () => {}) {
+    this.onPacket = onPacket; this.onDisconnect = onDisconnect; this.onOverflow = onOverflow;
+    this.queue = Promise.resolve(); this.tag = 0; this.running = false; this.pending = null;
+  }
+  async connect(hid) {
+    this.hid = hid;
+    const devices = await hid.requestDevice({ filters: [{ vendorId: 0x4c4b, productId: 0x524d, usagePage: 0xff62, usage: 0x61 }] });
+    if (!devices.length) throw new DOMException("選択をキャンセルしました", "NotFoundError");
+    this.device = devices.find(d => d.collections.some(c => c.usagePage === 0xff62 && c.usage === 0x61));
+    if (!this.device) throw new Error("USB診断対応のReeLが選ばれていません。ページ内の修正版UF2を書き込み、USBを挿し直してください。");
+    this.input = event => {
+      if (event.device !== this.device || event.reportId !== 0 || !this.pending) return;
+      const bytes = new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength);
+      if (bytes.length < 2 || bytes[0] !== 0xd2 || bytes[1] !== this.pending.tag) return;
+      const pending = this.pending; this.pending = null; clearTimeout(pending.timer);
+      try { pending.resolve(decodeUsbReport(bytes, pending.tag)); } catch (error) { pending.reject(error); }
+    };
+    this.removed = event => { if (event.device === this.device) this.fail(new Error("ReeLのUSB接続が切れました")); };
     try {
-      const server = await this.device.gatt.connect();
-      const service = await server.getPrimaryService(bleService);
-      this.command = await service.getCharacteristic(bleCommand);
-      this.data = await service.getCharacteristic(bleData);
-      this.notification = event => this.onPacket(event.target.value);
-      this.data.addEventListener("characteristicvaluechanged", this.notification);
-      await this.data.startNotifications();
-      await this.setMode(1);
+      if (!this.device.opened) await this.device.open();
+      this.device.addEventListener("inputreport", this.input); hid.addEventListener("disconnect", this.removed);
+      await this.exchange(0);
+      this.running = true; this.pollTask = this.poll();
     } catch (error) { await this.close(); throw error; }
   }
-  async setMode(mode) {
-    if (![0, 1, 2].includes(mode) || !this.command || !this.device?.gatt.connected) throw new Error("BLEが接続されていません");
-    await this.command.writeValueWithResponse(new Uint8Array([82, 84, 1, mode]));
+  exchange(command) {
+    const task = this.queue.then(() => this.request(command)); this.queue = task.catch(() => {}); return task;
+  }
+  request(command) {
+    if (!this.device?.opened || ![0,1,2,3].includes(command)) return Promise.reject(new Error("USBが接続されていません"));
+    const tag = this.tag = this.tag % 255 + 1;
+    const packet = new Uint8Array(64); packet.set([82,84,2,command,tag]);
+    return new Promise((resolve,reject) => {
+      const timer = setTimeout(() => {
+        if (this.pending?.tag !== tag) return;
+        this.pending = null; reject(new Error("ReeLからUSB診断の応答がありません。修正版UF2とUSB接続を確認してください。"));
+      }, 1500);
+      this.pending = { tag, resolve, reject, timer };
+      Promise.resolve().then(() => this.device.sendReport(0,packet)).catch(error => {
+        if (this.pending?.tag !== tag) return;
+        clearTimeout(timer); this.pending = null; reject(error);
+      });
+    });
+  }
+  async poll() {
+    try {
+      while (this.running) {
+        const reply = await this.exchange(1);
+        if (!this.running) break;
+        if (reply.overflow) this.onOverflow();
+        for (const packet of reply.packets) this.onPacket(packet);
+        await new Promise(resolve => setTimeout(resolve,8));
+      }
+    } catch (error) { if (this.running) this.fail(error); }
+  }
+  async capture() { await this.exchange(2); }
+  fail(error) {
+    this.running = false;
+    if (this.pending) { clearTimeout(this.pending.timer); this.pending.reject(error); this.pending = null; }
+    this.device?.removeEventListener("inputreport",this.input); this.hid?.removeEventListener("disconnect",this.removed);
+    this.onDisconnect(error);
+    this.device?.close().catch(() => {});
   }
   async close() {
-    if (this.command && this.device?.gatt.connected) await this.setMode(0).catch(() => {});
-    this.data?.removeEventListener("characteristicvaluechanged", this.notification);
-    this.device?.removeEventListener("gattserverdisconnected", this.disconnected);
-    if (this.device?.gatt.connected) this.device.gatt.disconnect();
-    this.command = null;
+    this.running = false;
+    await this.pollTask;
+    if (this.device?.opened) { await this.exchange(3).catch(() => {}); await this.device.close().catch(() => {}); }
+    this.device?.removeEventListener("inputreport",this.input); this.hid?.removeEventListener("disconnect",this.removed);
   }
 }
 
@@ -266,7 +313,7 @@ function initialize() {
   const storageKey = "reel-trackball-lab-v1";
   let history = [], storageHealthy = true;
   const state = { source: null, live: [], previous: null, arrival: 0, lost: 0, invalid: 0, unadjusted: null,
-    ble: null, transport: null, port: null, reader: null, readTask: null, closing: false, demoTimer: null, session: null, capture: null, run: null };
+    hid: null, transport: null, lastInvalid: 0, demoTimer: null, session: null, capture: null, run: null };
   const camera = { frame: null, reference: null, working: false, continuous: false, timeout: null, next: null, demo: null, started: 0, requestConditions: null };
   const fmt = (value, suffix = "", digits = 1) => Number.isFinite(value) ? value.toFixed(digits) + suffix : "—";
   const sourceName = source => ({ sensor: "センサー直結", browser: "ブラウザ入力", demo: "デモ・合成データ" }[source] || "未接続");
@@ -296,13 +343,12 @@ function initialize() {
     $("coordinateLabel").textContent = state.source === "sensor" ? "補正前のセンサー counts" : state.source === "demo" ? "合成データ / counts" : state.source === "browser" ? "PC側の移動単位 u" : "入力待ち";
   }
   function resetInput(source) {
-    state.source = source; state.live = []; state.previous = null; state.arrival = 0; state.lost = 0; state.invalid = 0; state.unadjusted = null;
-    $("connectSensor").textContent = state.port ? "USBを切断" : "USBで接続";
-    $("connectBle").textContent = state.ble ? "BLEを切断" : "BLEで接続";
-    $("sourceDetail").textContent = source === "sensor" ? (state.transport === "ble" ? "BLEでセンサーの生データを受信。22×22の実画像も撮影できます。" : "USBで補正前のΔX/ΔY・SQUAL・露光を受信。実画像の撮影はBLE接続で使えます。")
+    state.source = source; state.live = []; state.previous = null; state.arrival = 0; state.lost = 0; state.invalid = 0; state.lastInvalid = 0; state.unadjusted = null;
+    $("connectSensor").textContent = state.hid ? "USBを切断" : "USBで接続";
+    $("sourceDetail").textContent = source === "sensor" ? "USB HIDで補正前のΔX/ΔY・SQUAL・露光と22×22の実画像を受信します。"
       : source === "browser" ? "PC側の出力を測ります。SQUAL・露光は取得できません。測定中は対象のトラックボールだけを動かしてください。"
       : source === "demo" ? "画面と測定手順を試すための合成データです。実機の評価には使えません。"
-      : "BLEでセンサーの生データ・実画像を受信できます。";
+      : "USBでセンサーの生データ・実画像を受信できます。";
     renderCamera();
     sourceStatus(source === "sensor" ? "接続済み · センサーデータ待ち" : sourceName(source), source === "demo" ? "demo" : "");
   }
@@ -328,80 +374,43 @@ function initialize() {
     clearInterval(state.demoTimer); state.demoTimer = null;
     stopCamera(); camera.frame = null; camera.reference = null;
     paintFrame("sensorImage", null); paintFrame("referenceImage", null); renderFrameMetrics();
-    if (state.ble) { const ble = state.ble; state.ble = null; await ble.close(); }
-    state.transport = null;
-    state.closing = true;
-    if (state.reader) await state.reader.cancel().catch(() => {});
-    if (state.readTask) await state.readTask;
-    state.closing = false; resetInput(null);
-  }
-  async function readSensor(port) {
-    const reader = port.readable.getReader(); state.reader = reader;
-    const decoder = new TextDecoder(); const parser = new SensorLines();
-    try {
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-        for (const sample of parser.push(decoder.decode(value, { stream: true }))) ingest(sample);
-        state.invalid = parser.invalid;
-      }
-    } catch (error) { if (!state.closing) notice("USB入力が切断されました: " + error.message); }
-    finally {
-      reader.releaseLock(); state.reader = null;
-      await port.close().catch(() => {}); state.port = null;
-      stopSession("USB入力が切断されたため中断しました。");
-      sourceStatus("センサー切断 · 記録を停止しました", "error");
-      state.arrival = 0;
-    }
+    if (state.hid) { const hid = state.hid; state.hid = null; await hid.close(); }
+    state.transport = null; resetInput(null);
   }
   $("connectSensor").addEventListener("click", async () => {
-    if (state.port) { await disconnect(); return; }
-    if (!("serial" in navigator) || !window.isSecureContext) { notice("センサー接続にはChrome / EdgeのHTTPSまたはlocalhostで開いてください。"); return; }
+    if (state.hid) { await disconnect(); return; }
+    if (!navigator.hid || !window.isSecureContext) { notice("USB接続はChrome / Edgeでこのページを直接開いてください。"); return; }
     $("connectSensor").disabled = true;
     try {
       await disconnect();
-      const port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x4c4b, usbProductId: 0x524d }] });
-      await port.open({ baudRate: 115200, bufferSize: 65536 });
-      state.port = port; state.transport = "usb"; resetInput("sensor"); notice("");
-      state.readTask = readSensor(port);
-    } catch (error) {
-      if (error.name !== "NotFoundError") notice("接続できませんでした: " + error.message);
-    } finally { $("connectSensor").disabled = false; }
-  });
-  $("connectBle").addEventListener("click", async () => {
-    if (state.ble) { await disconnect(); return; }
-    if (!navigator.bluetooth || !window.isSecureContext) { notice("BLE接続はChrome / Edgeで、このページをHTTPSまたはlocalhostから直接開いてください。"); return; }
-    $("connectBle").disabled = true;
-    try {
-      await disconnect();
       const parser = new SensorPackets();
-      const ble = new BleSensorConnection(value => {
-        if (state.ble !== ble) return;
-        const event = parser.push(value); state.invalid = parser.invalid;
+      const hid = new UsbSensorConnection(value => {
+        if (state.hid !== hid) return;
+        const previousInvalid = parser.invalid;
+        const event = parser.push(value);
+        if (parser.invalid > previousInvalid) { state.invalid += parser.invalid - previousInvalid; state.lastInvalid = performance.now(); }
         if (!event) return;
         if (event.kind === "sample") {
           if (state.live.at(-1)?.cpi && state.live.at(-1).cpi !== event.sample.cpi) stopSession("CPIが変わったため測定を中断しました。");
           ingest(event.sample);
         } else if (event.kind === "start") {
-          stopSession("撮影中は移動量を測定できません。");
-          camera.working = true;
+          stopSession("撮影中は移動量を測定できません。"); camera.working = true;
           $("cameraStatus").textContent = "センサー撮影中 · 追跡を一時停止";
         } else if (event.kind === "progress") $("cameraStatus").textContent = '画像を受信中 · ' + event.count + ' / 484 px';
-        else if (event.kind === "frame") finishFrame(event.pixels, event.id);
+        else if (event.kind === "frame") finishFrame(event.pixels,event.id);
         else if (event.kind === "error") { stopCamera(); notice(event.message); $("cameraStatus").textContent = "撮影失敗 · 再撮影してください"; }
-      }, () => {
-        if (state.ble !== ble) return;
-        state.ble = null; state.arrival = 0; stopCamera(); stopSession("BLEが切断されたため中断しました。");
-        sourceStatus("BLE切断 · 再接続してください", "error");
-        $("connectBle").textContent = "BLEで接続"; renderCamera();
-      });
-      state.ble = ble; state.transport = "ble"; resetInput("sensor");
-      await ble.connect(navigator.bluetooth);
-      notice("BLE接続しました。画像の撮影中はカーソル追跡が一時停止します。");
-    } catch (error) {
-      await disconnect();
-      if (error.name !== "NotFoundError") notice("BLE接続できませんでした。右側の診断ファームとOSのBluetoothペアリングを確認してください: " + error.message);
-    } finally { $("connectBle").disabled = false; renderCamera(); }
+      }, error => {
+        if (state.hid !== hid) return;
+        state.hid = null; state.arrival = 0; stopCamera(); stopSession("USBが切断されたため中断しました。");
+        notice(error.message); sourceStatus("USB切断 · 再接続してください", "error");
+        $("connectSensor").textContent = "USBで接続"; renderCamera();
+      }, () => { state.invalid++; state.lastInvalid = performance.now(); });
+      state.hid = hid; state.transport = "usb-hid"; resetInput("sensor");
+      await hid.connect(navigator.hid);
+      $("usbFirmwareNote").hidden = true;
+      notice("USB接続しました。読み取り品質と画像取得を同じ接続で利用できます。");
+    } catch (error) { await disconnect(); if (error.name !== "NotFoundError") notice("USB接続できませんでした: " + error.message); }
+    finally { $("connectSensor").disabled = false; renderCamera(); }
   });
   $("browserInput").addEventListener("click", async () => {
     await disconnect(); resetInput("browser"); notice("");
@@ -427,7 +436,7 @@ function initialize() {
 
   function cameraConditions() {
     return { name: $("conditionName").value.trim(), ball: $("ball").value.trim(), position: $("position").value.trim(),
-      cpi: state.transport === "ble" ? state.live.at(-1)?.cpi ?? null : Number($("cpi").value), note: $("settingNote").value.trim() };
+      cpi: state.transport === "usb-hid" ? state.live.at(-1)?.cpi ?? null : Number($("cpi").value), note: $("settingNote").value.trim() };
   }
   function paintFrame(id, frame, stretch = $("stretchImage").checked) {
     const target = $(id), context = target.getContext("2d");
@@ -440,14 +449,14 @@ function initialize() {
   }
   function renderCamera() {
     $("prepare").disabled = !!state.session || camera.working || camera.continuous || !state.source || !fresh();
-    const ready = (state.transport === "ble" && state.ble?.command) || state.source === "demo";
+    const ready = (state.transport === "usb-hid" && state.hid?.device?.opened) || state.source === "demo";
     $("snapshot").disabled = !ready || !!state.session || camera.working || camera.continuous;
     $("continuous").disabled = !ready || !!state.session || (camera.working && !camera.continuous);
     $("continuous").textContent = camera.continuous ? "連続撮影を停止" : "連続撮影";
     $("referenceFrame").disabled = !camera.frame || camera.working;
     $("exportFrame").disabled = !camera.frame; $("exportPng").disabled = !camera.frame;
     $("imageKind").textContent = state.source === "demo" ? "DEMO · 合成画像 / 22×22" : "実画像 · 22×22 / 7 bit";
-    if (!camera.frame && !camera.working) $("cameraStatus").textContent = state.source === "demo" ? "合成画像の表示を試せます" : "BLE接続後に撮影できます";
+    if (!camera.frame && !camera.working) $("cameraStatus").textContent = state.source === "demo" ? "合成画像の表示を試せます" : "USB接続後に撮影できます";
   }
   function stopCamera() {
     clearTimeout(camera.timeout); clearTimeout(camera.next); clearTimeout(camera.demo);
@@ -455,26 +464,26 @@ function initialize() {
     renderCamera();
   }
   async function requestFrame() {
-    if (camera.working || state.session || !(state.ble?.command || state.source === "demo")) return;
+    if (camera.working || state.session || !(state.hid?.device?.opened || state.source === "demo")) return;
     camera.working = true; camera.started = performance.now(); camera.requestConditions = cameraConditions();
     state.live = []; state.previous = null; state.arrival = 0;
     $("cameraStatus").textContent = "撮影要求中 · 追跡を一時停止"; renderCamera();
     camera.timeout = setTimeout(() => {
       stopCamera(); $("cameraStatus").textContent = "撮影タイムアウト · 最後の画像を保持";
-      notice("画像が届きませんでした。診断ファームとBLE接続を確認してください。");
+      notice("画像が届きませんでした。診断ファームとUSB接続を確認してください。");
     }, 8000);
     try {
       if (state.source === "demo") {
         const phase = performance.now() / 700;
         const pixels = Uint8Array.from({ length: 484 }, (_, i) => Math.round(64 + 28 * Math.sin(i % 22 / 2 + phase) * Math.cos(Math.floor(i / 22) / 2 - phase)));
         camera.demo = setTimeout(() => finishFrame(pixels, 0), 200);
-      } else await state.ble.setMode(2);
+      } else await state.hid.capture();
     } catch (error) { stopCamera(); notice("撮影を開始できませんでした: " + error.message); }
   }
   function finishFrame(pixels, id) {
     clearTimeout(camera.timeout); camera.timeout = null; camera.demo = null;
     camera.working = false; state.live = []; state.previous = null; state.arrival = 0;
-    camera.frame = { id, date: new Date().toISOString(), source: state.source === "demo" ? "demo" : "sensor-ble",
+    camera.frame = { id, date: new Date().toISOString(), source: state.source === "demo" ? "demo" : "sensor-usb",
       captureMs: performance.now() - camera.started, conditions: camera.requestConditions || cameraConditions(),
       pixels: Array.from(pixels), metrics: frameMetrics(pixels) };
     $("cameraStatus").textContent = (camera.frame.source === "demo" ? "合成画像" : "受信完了 · 追跡復帰") + ' · ' + fmt(camera.frame.captureMs, ' ms', 0) + ' / 撮影・転送';
@@ -538,7 +547,7 @@ function initialize() {
       unadjusted: null, complete: false, strokes: [],
       conditions: { name: $("conditionName").value.trim(), ball: $("ball").value.trim(), position: $("position").value.trim(), cpi: Number($("cpi").value), travel: Number($("travel").value), note: $("settingNote").value.trim() }
     };
-    if (state.transport === "ble" && state.live.at(-1)?.cpi) state.run.conditions.cpi = state.live.at(-1).cpi;
+    if (state.transport === "usb-hid" && state.live.at(-1)?.cpi) state.run.conditions.cpi = state.live.at(-1).cpi;
     state.session = { protocol: state.run.protocol }; lockControls(true);
     try {
       if (state.source === "browser") {
@@ -716,7 +725,8 @@ function initialize() {
     $("liveRate").textContent = state.source === "browser" && alive ? fmt(live.length / 4, "", 0) : alive && span > 0 ? fmt((live.length - 1) * 1000 / span, "", 0) : "—";
     $("liveLost").textContent = state.source === "sensor" ? `${state.lost} / 不正 ${state.invalid}` : "—";
     if (state.source === "sensor") {
-      sourceStatus(camera.working ? "センサー撮影中 · 追跡を一時停止" : alive ? (state.lost || state.invalid ? (state.transport === "ble" ? "BLE" : "USB") + "受信中 · 通信欠落あり" : (state.transport === "ble" ? "BLE" : "USB") + " · センサー受信中") : state.port || state.ble ? "データ待ち · 診断ファームと接続を確認" : "センサー切断", alive ? state.lost || state.invalid ? "error" : "live" : "error");
+      const recentProblem = live.some(s => s.lost) || (state.lastInvalid > 0 && performance.now() - state.lastInvalid < 4000);
+      sourceStatus(camera.working ? "センサー撮影中 · 追跡を一時停止" : alive ? recentProblem ? "USB受信中 · 直近4秒に通信欠落" : "USB HID · センサー受信中" : state.hid ? "USBデータ待ち" : "USB切断", alive ? recentProblem ? "error" : "live" : "error");
       if (!alive && state.session && !camera.working) stopSession("センサーデータが途切れました。未完了の結果は比較に使いません。");
     }
     renderCamera();

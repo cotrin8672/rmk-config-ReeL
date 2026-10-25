@@ -1,0 +1,10 @@
+import { execFileSync } from "node:child_process";
+import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+const metadata = JSON.parse(execFileSync("cargo", ["metadata", "--locked", "--format-version", "1"], { encoding: "utf8", maxBuffer: 16 * 1024 * 1024 }));
+const rmk = metadata.packages.find(p => p.name === "rmk");
+if (!rmk) throw new Error("Pinned RMK package not found");
+const source = join(dirname(rmk.manifest_path), "src", "usb", "diagnostic_protocol.rs");
+const output = join(tmpdir(), "reel-usb-diagnostic-tests" + (process.platform === "win32" ? ".exe" : ""));
+execFileSync("rustc", ["--edition", "2024", "--test", source, "-o", output], { stdio: "inherit" });
+execFileSync(output, [], { stdio: "inherit" });

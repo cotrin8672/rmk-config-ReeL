@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { SensorPackets, BleSensorConnection, bleService, frameMetrics, frameRgba, SensorLines, parseSensorLine, summarizeStroke, summarizeRun, comparisonIssues, quantile, csvCell, rawCsv } from "./trackball-diagnostics.mjs";
+import { SensorPackets, UsbSensorConnection, decodeUsbReport, frameMetrics, frameRgba, SensorLines, parseSensorLine, summarizeStroke, summarizeRun, comparisonIssues, quantile, csvCell, rawCsv } from "./trackball-diagnostics.mjs";
 
 test("USB fragments preserve signed counts and reject malformed sensor records", () => {
   const parser = new SensorLines();
@@ -78,7 +78,7 @@ function chunks(id, pixels) { return Array.from({ length: 35 }, (_, i) => {
   b.set(pixels.slice(offset, offset + 14), 6); return b;
 }); }
 
-test("BLE preserves the firmware wire fixture and unwraps microsecond clocks", () => {
+test("USB packet payload preserves the firmware wire fixture and unwraps microsecond clocks", () => {
   const parser = new SensorPackets();
   const padded = new Uint8Array(40); padded.set(telemetry, 10);
   assert.deepEqual(parser.push(new DataView(padded.buffer, 10, 20)).sample,
@@ -96,7 +96,7 @@ test("BLE preserves the firmware wire fixture and unwraps microsecond clocks", (
   next[17] = 128; view.setUint16(18, 201, true); assert.equal(parser.push(next), null);
 });
 
-test("only complete matching 484-pixel frames survive BLE chunk loss or corruption", () => {
+test("only complete matching 484-pixel frames survive USB chunk loss or corruption", () => {
   const pixels = Uint8Array.from({ length: 484 }, (_, i) => i % 128), parser = new SensorPackets();
   const packets = chunks(23, pixels);
   parser.push(status(23, 1));
@@ -127,18 +127,70 @@ test("frame contrast uses raw values and rendering follows the datasheet column 
   assert.throws(() => frameMetrics([1])); assert.throws(() => frameRgba(new Uint8Array(484).fill(255)));
 });
 
-test("BLE client subscribes before starting, sends capture, and stops cleanly", async () => {
-  const writes = [], listeners = new Map(); let subscribed = false, seen = 0, disconnected = 0;
-  const command = { async writeValueWithResponse(b) { assert.ok(subscribed); writes.push(Array.from(b)); } };
-  const data = { addEventListener(k, fn) { listeners.set(k, fn); }, removeEventListener(k) { listeners.delete(k); }, async startNotifications() { subscribed = true; } };
-  const device = { addEventListener(k, fn) { listeners.set(k, fn); }, removeEventListener(k) { listeners.delete(k); },
-    gatt: { connected: false, async connect() { this.connected = true; return { async getPrimaryService(uuid) { assert.equal(uuid, bleService); return { async getCharacteristic(id) { return id.includes("8a01") ? command : data; } }; } }; }, disconnect() { this.connected = false; listeners.get("gattserverdisconnected")?.(); } } };
-  const connection = new BleSensorConnection(() => seen++, () => disconnected++);
-  await connection.connect({ async requestDevice(options) { assert.equal(options.filters[0].namePrefix, "ReeL"); assert.deepEqual(options.optionalServices, [bleService]); return device; } });
-  listeners.get("characteristicvaluechanged")({ target: { value: new DataView(telemetry.buffer) } });
-  await connection.setMode(2); await connection.close();
-  assert.equal(seen, 1); assert.equal(disconnected, 0); assert.equal(device.gatt.connected, false);
-  assert.deepEqual(writes, [[82, 84, 1, 1], [82, 84, 1, 2], [82, 84, 1, 0]]);
-  assert.equal(listeners.size, 0); await assert.rejects(() => connection.setMode(2));
-  const a = run(), b = run(); b.transport = "ble"; assert.equal(comparisonIssues(a, b).length, 1);
+function usbReply(tag, packets = [], overflow = false) {
+  const reply = new Uint8Array(64); reply.set([0xd2,tag,3 | (overflow ? 128 : 0),packets.length]);
+  packets.forEach((p,i)=>reply.set(p,4+i*20)); return reply;
+}
+
+test("USB batches preserve three complete records and reject corrupt replies", () => {
+  const reply = usbReply(9,[telemetry,telemetry,telemetry],true);
+  const parsed = decodeUsbReport(new DataView(reply.buffer),9);
+  assert.equal(parsed.overflow,true); assert.equal(parsed.packets.length,3);
+  parsed.packets.forEach(p=>assert.deepEqual(p,telemetry));
+  assert.throws(()=>decodeUsbReport(reply,8));
+  assert.throws(()=>decodeUsbReport(reply.slice(0,63),9));
+  const count = reply.slice(); count[3]=4; assert.throws(()=>decodeUsbReport(count,9));
+  const padding = usbReply(9); padding[63]=1; assert.throws(()=>decodeUsbReport(padding,9));
+  assert.equal(decodeUsbReport(usbReply(10),10).packets.length,0);
+});
+
+function fakeUsb() {
+  const events = new Map(), apiEvents = new Map(), writes = [], packets = [telemetry,telemetry,telemetry];
+  const device = { opened:false, collections:[{usagePage:0xff62,usage:0x61}],
+    async open(){this.opened=true;},async close(){this.opened=false;},
+    addEventListener(k,v){events.set(k,v);},removeEventListener(k){events.delete(k);},
+    async sendReport(id,bytes){
+      assert.equal(id,0);assert.equal(bytes.length,64);assert.deepEqual(Array.from(bytes.slice(0,3)),[82,84,2]);
+      writes.push(bytes.slice());
+      if (bytes[3] === 2) packets.push(status(23,1),...chunks(23,Uint8Array.from({length:484},(_,i)=>i%128)),status(23,2));
+      const reply=usbReply(bytes[4],bytes[3]===1?packets.splice(0,3):[]);
+      queueMicrotask(()=>events.get("inputreport")?.({device,reportId:0,data:new DataView(reply.buffer)}));
+    }
+  };
+  const hid={async requestDevice(options){assert.deepEqual(options.filters,[{vendorId:0x4c4b,productId:0x524d,usagePage:0xff62,usage:0x61}]);return [device];},addEventListener(k,v){apiEvents.set(k,v);},removeEventListener(k){apiEvents.delete(k);}};
+  return {hid,device,events,apiEvents,writes};
+}
+
+test("USB client starts, drains samples, serializes capture and stops with no event leaks", async () => {
+  const fake=fakeUsb();let seen=0,disconnected=0;
+  const connection=new UsbSensorConnection(p=>{assert.deepEqual(p,telemetry);seen++;},()=>disconnected++);
+  await connection.connect(fake.hid); await connection.capture(); await connection.close();
+  assert.equal(seen,3);assert.equal(disconnected,0);assert.equal(fake.device.opened,false);
+  assert.equal(fake.writes[0][3],0);assert.ok(fake.writes.some(p=>p[3]===2));assert.equal(fake.writes.at(-1)[3],3);
+  assert.equal(new Set(fake.writes.map(p=>p[4])).size,fake.writes.length);
+  assert.equal(fake.events.size,0);assert.equal(fake.apiEvents.size,0);
+  await assert.rejects(()=>connection.capture());
+});
+
+test("USB disconnect and send failure clean up pending requests without hanging", async () => {
+  const fake=fakeUsb();let error;
+  const connection=new UsbSensorConnection(()=>{},e=>error=e);
+  await connection.connect(fake.hid);
+  fake.apiEvents.get("disconnect")({device:fake.device}); await connection.pollTask;
+  assert.match(error.message,/USB/);assert.equal(fake.events.size,0);assert.equal(fake.apiEvents.size,0);
+  const failed=fakeUsb();failed.device.sendReport=async()=>{throw new Error("write failed");};
+  const broken=new UsbSensorConnection(()=>{},()=>{});
+  await assert.rejects(()=>broken.connect(failed.hid),/write failed/);
+  assert.equal(broken.pending,null);assert.equal(failed.device.opened,false);assert.equal(failed.events.size,0);
+});
+
+test("USB connection carries a complete frame through batched responses", async () => {
+  const fake=fakeUsb(), parser=new SensorPackets();let done;
+  const frameReady=new Promise(resolve=>done=resolve);
+  const connection=new UsbSensorConnection(packet=>{const event=parser.push(packet);if(event?.kind==="frame")done(event);},error=>{throw error;});
+  await connection.connect(fake.hid);await connection.capture();
+  const timeout=setTimeout(()=>done(null),1500);
+  const frame=await frameReady;clearTimeout(timeout);await connection.close();
+  assert.ok(frame);assert.equal(frame.id,23);assert.equal(parser.invalid,0);
+  assert.deepEqual(frame.pixels,Uint8Array.from({length:484},(_,i)=>i%128));
 });
