@@ -286,7 +286,8 @@ export class UsbSensorConnection {
         if (!this.running) break;
         if (reply.overflow) this.onOverflow();
         for (const packet of reply.packets) this.onPacket(packet);
-        await new Promise(resolve => setTimeout(resolve,8));
+        // Drain queued records immediately; only idle polls need a delay.
+        if (!reply.packets.length) await new Promise(resolve => setTimeout(resolve,4));
       }
     } catch (error) { if (this.running) this.fail(error); }
   }
