@@ -144,7 +144,7 @@ dialog dd{margin:3px 0 0; line-height:1.7; color:var(--muted)}
 @media(max-height:650px) and (min-width:821px){.topbar{height:32px}
 body{grid-template-rows:32px minmax(0,1fr)}
 .console{padding:5px; gap:6px}
-.workspace{grid-template-rows:minmax(155px,.85fr) minmax(100px,.6fr) minmax(220px,1.35fr); gap:6px}
+.workspace{grid-template-rows:minmax(185px,.85fr) minmax(100px,.6fr) minmax(220px,1.35fr); gap:6px}
 .sidebar{gap:6px}
 .connection{gap:4px; padding:5px}
 .connection .primary{grid-column:auto}
