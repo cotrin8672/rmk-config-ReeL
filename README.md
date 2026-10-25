@@ -55,6 +55,145 @@ matrix or key geometry changes, review and update this file explicitly.
 
 ## Browser tuning console
 
+### Sensor diagnostics and condition comparison
+
+Start the local page from the repository root (Python 3 must be on PATH):
+
+```powershell
+powershell -NoProfile -File .\tools\start-trackball-lab.ps1
+```
+
+Open <http://127.0.0.1:4321/trackball-diagnostics.html> in desktop Chrome/Edge.
+The script reuses an existing server or starts one in the background, independent
+of the chat terminal. Run it again after a PC restart. No hosting or login is
+required. This complements the existing calibration console: stabilize optical
+tracking and compare hardware positions before fitting angle and sensitivity
+corrections.
+
+One guided run replaces the four test selectors: hands-off rest (5 seconds),
+vertical slow, vertical fast, horizontal slow, then horizontal fast. For each
+movement stage, place the finger at the upper/left end of its comfortable
+range and press Space. A dot previews the pace before starting; after a
+3-second countdown, follow its motion through five full reciprocations.
+The dot crosses the same distance in 2 seconds for slow and 0.5 seconds for
+fast, with a 0.4-second hold at each end. This is a timing cue for finger
+movement, not a target for the mouse cursor. Each stage ends automatically.
+R repeats the current stage (or returns to the previous stage while waiting),
+and Esc aborts. Images stay paused throughout measurement.
+
+The cue clock also defines all ten one-way measurement windows. Opposite
+strokes are analyzed separately, and zero-output windows remain in the report.
+The summary shows up/down and left/right output balance, repeatability,
+fast/slow output ratios, normalized sideways jitter and stationary drift.
+The detailed report opens automatically at completion and can be saved as a
+standalone HTML document or printed. It includes conditions, cue timings,
+every one-way stroke, quality/exposure values, transfer problems and plots.
+History keeps the full statistical report and 128-bin plots; raw samples
+remain available for the current run as CSV/JSON and should be saved before
+starting another run. Old single-test histories remain available as JSON;
+comparisons use runs collected with the new guided procedure.
+
+Record the ball, case position and height change relative to the baseline.
+USB telemetry reads back actual CPI; browser input records the entered CPI.
+The guide does not measure actual ball rotation or physical speed: ratios
+remain hand-operated comparisons, not a calibrated counts/mm or dropout rate.
+Keep wrist placement, finger range, ball and CPI fixed while changing case
+position or distance. Browser pointer input and explicitly labeled synthetic
+demo data remain available; they do not substitute for sensor diagnostics.
+
+The desktop console keeps images, all three plots, measurements and comparison
+on one viewport; narrow screens stack panels. History, instructions and the
+detailed report use dialogs. Image capture is manual: PMW3610 cannot track
+motion while capturing/resetting. Stop live capture to restore uninterrupted
+navigation. The image viewer retains A/B references, raw brightness/contrast
+statistics, PNG and frame JSON exports.
+
+For direct sensor data, flash **only the right half** with
+`reel_right_usb_diagnostics.uf2`. Unplug/replug USB, open the local page directly
+in Chrome/Edge and select **USBで接続**, then ReeL. This uses WebHID, as the
+existing calibration console does. The older `reel_right_diagnostics.uf2` used
+a serial logger and must be replaced once. The local download link serves
+`tools/firmware/reel_right_usb_diagnostics.uf2`, copied from successful CI.
+This generated directory is not committed. Restore normal `reel_right.uf2`
+after testing; the left half does not need to be flashed for diagnostics.
+
+Build with `cargo build --release --locked --bin reel_right --no-default-features --features trackball-diagnostics`.
+
+The diagnostic feature selects the RMK fork's opt-in `usb_diagnostics` HID
+interface. It does not route measurements through the 1 KiB debug logger.
+Sampling retains the existing seven-byte PMW3610 smart burst and a nominal
+four-millisecond polling interval. A bounded 128-record queue batches three
+complete records into each 64-byte USB response. Real overflow is signaled
+and sequence gaps invalidate affected measurements. The live warning covers
+the last four seconds while the readout retains cumulative counts.
+
+The dedicated collection uses vendor page `0xff62`, usage `0x61`, report ID 0.
+Keyboard and Vial reports remain on their original collections.
+
+- Request: 64 bytes, prefix `[0x52,0x54,2,command,tag]` and zero padding.
+  Commands: 0 start, 1 poll, 2 capture, 3 stop. Tags match each response.
+- Reply: `[0xd2,tag,flags,count]` plus up to three 20-byte sensor packets;
+  unused bytes are zero. Flags `3` identify protocol/camera support;
+  `0x80` additionally indicates real queue overflow.
+- `T,1` packet: sequence u32, timestamp_us u32, dx/dy i16, SQUAL u8,
+  shutter u16, motion u8, CPI u16 (little-endian). The page unwraps the clock.
+- `S,1`: frame ID u16 and phase (1 start, 2 restored, 3 capture/reset error).
+- `F,1`: frame ID u16, offset u16, up to 14 seven-bit pixels; zero padding.
+  A full frame has 484 pixels in 35 chunks, followed by the restored marker.
+- Polling during capture does not cancel it. After two seconds without host
+  requests streaming stops; the next poll resumes it. This endpoint exposes
+  no calibration/flash writes or arbitrary register commands.
+
+Capture pauses navigation and always resets/reconfigures PMW3610 afterward,
+restoring CPI and smart mode. The page requires every valid chunk and a
+restoration marker before accepting the image. Pixel order follows PixArt
+Figure 17: top right, down each column, then left. Display contrast stretch
+does not change PNG/raw statistics. USB connection starts in navigation mode, without capturing images.
+Selecting **ライブ開始** requests the next frame after receiving a real
+navigation sample; the graphs retain
+history and break their lines across intentional capture pauses. Displayed
+image FPS measures completed captures, including transfer and recovery.
+Selecting **測定を開始** stops live capture and waits for navigation to resume
+before recording. Camera and movement tests are mutually exclusive.
+Hardware pins, split roles, keyboard Bluetooth and calibration
+flash formats are unchanged. Normal builds retain interrupt-driven polling.
+
+Metrics have deliberately limited interpretations:
+
+- Directional output is the median net displacement of three equal strokes;
+  repeatability is sample standard deviation / mean (CV). Four-direction
+  balance is the smallest / largest direction median, undefined for zero output.
+- Sideways RMS is cumulative deviation from the stroke's start/end line;
+  reversal is backward displacement / total absolute displacement projected
+  onto that line. Both are independent of sensor mounting rotation.
+- SQUAL P10 is calculated per stroke, then summarized by its median. There is
+  no universal SQUAL pass threshold. Shutter is reported in register units.
+- Maximum no-input time includes intended stops, startup and the end of a
+  gesture. It is not a sensor-drop percentage. A fast/slow ratio requires the
+  same physical rotation, CPI and input source; hand motion remains a confound.
+- Sampling is observed register readout/receipt, not sensor imaging frame rate.
+  The diagnostic build changes logging load and idle polling/power. Repeat
+  final feel checks with normal firmware, and test USB on the actual device.
+- History stores summaries locally; raw samples for the current measurement
+  can be exported before starting another. Data is not uploaded by the page.
+
+Research informing this implementation:
+
+| Reference | Applied finding |
+| --- | --- |
+| [Keyball Link](https://keyball-link.shiroganelab.com/) and [Vial Web](https://vial.rocks/) | Custom keyboard tools connect to firmware-defined interfaces; retain ReeL's existing Vial calibration instead of building another settings protocol. |
+| [QMK Raw HID](https://docs.qmk.fm/features/rawhid) and [HID Explorer](https://nondebug.github.io/webhid-explorer/) | Raw HID exposes defined reports, not arbitrary hidden sensor registers; live sensor diagnostics need firmware support. |
+| [Pinned RMK PMW3610 driver](https://github.com/rmk-rs/rmk/blob/936a2a828fddc195d20e42bd952119cd3afa8172/rmk/src/input_device/pmw3610.rs) and [Zephyr's PMW3610 driver](https://github.com/zephyrproject-rtos/zephyr/blob/main/drivers/input/input_pmw3610.c) | Reuse the smart burst; confirm SQUAL/shutter offsets and the motion-valid gate. |
+| [Mouse Sensor Lab](https://keymap.io/mouse-sensor-test/) | Repeated slow/fast strokes, hands-off noise and condition comparison are useful; browser mouse output still includes the OS/firmware path. |
+| [PixArt full PMW3610 datasheet](https://trackballs.eu/media/Nakabayashi/Digio2/PMW3610DM-SUDU.pdf), pp17/33 | Frame-burst register sequence, mandatory reset before navigation, 22x22 pixels and column order. |
+| [WebHID](https://developer.chrome.com/docs/capabilities/hid) | Use the same OS HID access method as the calibration console, with a sensor-only USB collection. |
+| RMK USB logger source | Replace the 1 KiB debug-log ring with batched binary HID requests for sensor measurements. |
+
+Run the browser math/parser and live-capture regression checks with `node --test tools/test-trackball-diagnostics.mjs`.
+CI also runs the pinned RMK USB queue/protocol tests with `node tools/test-usb-diagnostic-protocol.mjs`, tests the sensor burst decoder and builds both normal and diagnostic UF2s.
+
+### Calibration console
+
 Open `tools/trackball-profiler.html` in Chrome or Edge and select
 **ワイヤレス接続**. The profiler uses RMK's existing vendor-defined Vial HID
 collection, so the same page works through either USB or the bonded BLE
